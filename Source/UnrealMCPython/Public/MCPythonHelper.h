@@ -194,6 +194,27 @@ public:
     UFUNCTION(BlueprintCallable, Category="Editor|MCPython")
     static FString UmgSetWidgetIsVariable(UBlueprint* WidgetBP, const FString& WidgetName, bool bIsVariable);
 
+    /** Set CanvasPanelSlot layout (anchors + position/size) in one call.
+     *  AnchorMin/Max: 0..1 fractions. OffsetX/Y: pixel offset from anchor. SizeX/Y: pixel size. */
+    UFUNCTION(BlueprintCallable, Category="Editor|MCPython")
+    static FString UmgSetSlotLayout(UBlueprint* WidgetBP, const FString& WidgetName,
+        float AnchorMinX, float AnchorMinY, float AnchorMaxX, float AnchorMaxY,
+        float OffsetX, float OffsetY, float SizeX, float SizeY);
+
+    /** Set font size, text color, and outline size on a TextBlock widget in one call. */
+    UFUNCTION(BlueprintCallable, Category="Editor|MCPython")
+    static FString UmgSetTextStyle(UBlueprint* WidgetBP, const FString& WidgetName,
+        int32 FontSize, float ColorR, float ColorG, float ColorB, float ColorA,
+        int32 OutlineSize);
+
+    /** Get an editor property value from a widget as a JSON string. */
+    UFUNCTION(BlueprintCallable, Category="Editor|MCPython")
+    static FString UmgGetWidgetProperty(UBlueprint* WidgetBP, const FString& WidgetName, const FString& PropertyName);
+
+    /** Set an editor property value on a widget from a string. Supports bool, int, float, and string properties. */
+    UFUNCTION(BlueprintCallable, Category="Editor|MCPython")
+    static FString UmgSetWidgetProperty(UBlueprint* WidgetBP, const FString& WidgetName, const FString& PropertyName, const FString& Value);
+
     /** Add a component to a Blueprint's SCS.
      *  ComponentClassPath e.g. "/Script/Engine.CameraComponent"
      *  ParentComponentName: name of the parent SCS node, or "" to attach to root */
@@ -204,6 +225,32 @@ public:
         float LocationX, float LocationY, float LocationZ,
         float RotationPitch, float RotationYaw, float RotationRoll,
         const FString& ParentComponentName);
+
+    /** List all SCS components on a Blueprint. Returns JSON array of {name, class, variable_name}. */
+    UFUNCTION(BlueprintCallable, Category="Editor|MCPython")
+    static FString ListBlueprintComponents(UBlueprint* Blueprint);
+
+    /** Remove a component by variable name from a Blueprint's SCS.
+     *  Promotes children to the removed node's parent (safe remove). */
+    UFUNCTION(BlueprintCallable, Category="Editor|MCPython")
+    static FString RemoveComponentFromBlueprint(UBlueprint* Blueprint, const FString& ComponentName);
+
+    /** Set a property on a component template in a Blueprint's SCS.
+     *  ComponentName: the variable name of the component.
+     *  PropertyName: the property to set (e.g. "relative_location", "sphere_radius").
+     *  Value: string representation (e.g. "(X=0,Y=0,Z=100)" or "50.0"). */
+    UFUNCTION(BlueprintCallable, Category="Editor|MCPython")
+    static FString SetComponentProperty(UBlueprint* Blueprint,
+        const FString& ComponentName,
+        const FString& PropertyName,
+        const FString& Value);
+
+    /** Set the canvas position of a node in a Blueprint graph by node name. */
+    UFUNCTION(BlueprintCallable, Category="Editor|MCPython")
+    static FString SetBlueprintNodePosition(UBlueprint* Blueprint,
+        const FString& GraphName,
+        const FString& NodeName,
+        float PosX, float PosY);
 
     /** Set a pin default on a blueprint node.
      *  For object pins, Value should be an asset path like "/Engine/BasicShapes/Sphere.Sphere".

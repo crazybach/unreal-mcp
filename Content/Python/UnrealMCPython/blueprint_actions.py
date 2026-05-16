@@ -3,6 +3,7 @@
 import unreal
 import json
 import traceback
+from collections import deque
 
 
 def _load_asset(asset_path, expected_class=None):
@@ -221,5 +222,214 @@ def ue_compile_blueprint(asset_path: str = None) -> str:
             return err
         result_json = unreal.MCPythonHelper.compile_blueprint(bp)
         return result_json
+    except Exception as e:
+        return json.dumps({"success": False, "message": str(e), "traceback": traceback.format_exc()})
+
+
+# ─── Component Management ──────────────────────────────────────────────────────
+
+def ue_list_blueprint_components(asset_path: str = None) -> str:
+    """Lists all SCS components on a Blueprint."""
+    if asset_path is None:
+        return json.dumps({"success": False, "message": "Required parameter 'asset_path' is missing."})
+    try:
+        bp, err = _load_asset(asset_path, unreal.Blueprint)
+        if err:
+            return err
+        return unreal.MCPythonHelper.list_blueprint_components(bp)
+    except Exception as e:
+        return json.dumps({"success": False, "message": str(e), "traceback": traceback.format_exc()})
+
+
+def ue_add_component_to_blueprint(asset_path: str = None,
+                                   component_class_path: str = None,
+                                   component_name: str = None,
+                                   location_x: float = 0.0, location_y: float = 0.0, location_z: float = 0.0,
+                                   rotation_pitch: float = 0.0, rotation_yaw: float = 0.0, rotation_roll: float = 0.0,
+                                   parent_component_name: str = "") -> str:
+    """Adds a component to a Blueprint's SCS."""
+    if asset_path is None:
+        return json.dumps({"success": False, "message": "Required parameter 'asset_path' is missing."})
+    if component_class_path is None:
+        return json.dumps({"success": False, "message": "Required parameter 'component_class_path' is missing."})
+    if component_name is None:
+        return json.dumps({"success": False, "message": "Required parameter 'component_name' is missing."})
+    try:
+        bp, err = _load_asset(asset_path, unreal.Blueprint)
+        if err:
+            return err
+        result = unreal.MCPythonHelper.add_component_to_blueprint(
+            bp, component_class_path, component_name,
+            location_x, location_y, location_z,
+            rotation_pitch, rotation_yaw, rotation_roll,
+            parent_component_name or ""
+        )
+        unreal.EditorAssetLibrary.save_asset(bp.get_path_name(), only_if_is_dirty=False)
+        return result
+    except Exception as e:
+        return json.dumps({"success": False, "message": str(e), "traceback": traceback.format_exc()})
+
+
+def ue_remove_component_from_blueprint(asset_path: str = None, component_name: str = None) -> str:
+    """Removes a component by variable name from a Blueprint's SCS."""
+    if asset_path is None:
+        return json.dumps({"success": False, "message": "Required parameter 'asset_path' is missing."})
+    if component_name is None:
+        return json.dumps({"success": False, "message": "Required parameter 'component_name' is missing."})
+    try:
+        bp, err = _load_asset(asset_path, unreal.Blueprint)
+        if err:
+            return err
+        result = unreal.MCPythonHelper.remove_component_from_blueprint(bp, component_name)
+        unreal.EditorAssetLibrary.save_asset(bp.get_path_name(), only_if_is_dirty=False)
+        return result
+    except Exception as e:
+        return json.dumps({"success": False, "message": str(e), "traceback": traceback.format_exc()})
+
+
+def ue_set_component_property(asset_path: str = None, component_name: str = None,
+                               property_name: str = None, value: str = None) -> str:
+    """Sets a property on a component template in a Blueprint's SCS."""
+    if asset_path is None:
+        return json.dumps({"success": False, "message": "Required parameter 'asset_path' is missing."})
+    if component_name is None:
+        return json.dumps({"success": False, "message": "Required parameter 'component_name' is missing."})
+    if property_name is None:
+        return json.dumps({"success": False, "message": "Required parameter 'property_name' is missing."})
+    if value is None:
+        return json.dumps({"success": False, "message": "Required parameter 'value' is missing."})
+    try:
+        bp, err = _load_asset(asset_path, unreal.Blueprint)
+        if err:
+            return err
+        result = unreal.MCPythonHelper.set_component_property(bp, component_name, property_name, value)
+        unreal.EditorAssetLibrary.save_asset(bp.get_path_name(), only_if_is_dirty=False)
+        return result
+    except Exception as e:
+        return json.dumps({"success": False, "message": str(e), "traceback": traceback.format_exc()})
+
+
+# ─── Graph Auto-Layout ─────────────────────────────────────────────────────────
+
+def ue_set_blueprint_node_position(asset_path: str = None, graph_name: str = "EventGraph",
+                                    node_name: str = None, pos_x: float = 0.0, pos_y: float = 0.0) -> str:
+    """Sets the canvas position of a node in a Blueprint graph."""
+    if asset_path is None:
+        return json.dumps({"success": False, "message": "Required parameter 'asset_path' is missing."})
+    if node_name is None:
+        return json.dumps({"success": False, "message": "Required parameter 'node_name' is missing."})
+    try:
+        bp, err = _load_asset(asset_path, unreal.Blueprint)
+        if err:
+            return err
+        return unreal.MCPythonHelper.set_blueprint_node_position(bp, graph_name, node_name, pos_x, pos_y)
+    except Exception as e:
+        return json.dumps({"success": False, "message": str(e), "traceback": traceback.format_exc()})
+
+
+def ue_auto_layout_graph(asset_path: str = None, graph_name: str = "EventGraph",
+                          x_step: float = 380.0, y_step: float = 200.0) -> str:
+    """Auto-lays out all nodes in a Blueprint graph using DAG topological sort."""
+    if asset_path is None:
+        return json.dumps({"success": False, "message": "Required parameter 'asset_path' is missing."})
+    try:
+        bp, err = _load_asset(asset_path, unreal.Blueprint)
+        if err:
+            return err
+
+        graph_info_str = unreal.MCPythonHelper.get_blueprint_graph_info(bp, graph_name)
+        graph_info = json.loads(graph_info_str)
+        if not graph_info.get("success"):
+            return graph_info_str
+
+        nodes = graph_info.get("nodes", [])
+        if not nodes:
+            return json.dumps({"success": True, "message": "No nodes to lay out.", "positioned": 0})
+
+        node_names = [n["node_name"] for n in nodes]
+        name_set = set(node_names)
+
+        in_degree = {n: 0 for n in node_names}
+        successors = {n: [] for n in node_names}
+
+        ENTRY_TYPES = {"K2Node_Event", "K2Node_CustomEvent", "K2Node_InputKey",
+                       "K2Node_InputAction", "K2Node_FunctionEntry"}
+
+        for node in nodes:
+            node_name = node["node_name"]
+            for pin in node.get("pins", []):
+                if pin.get("direction") != "Output":
+                    continue
+                pin_type = pin.get("type", "")
+                if pin_type not in ("exec", ""):
+                    continue
+                for link in pin.get("linked_to", []):
+                    target = link.get("node_name", "")
+                    if target in name_set and target != node_name:
+                        if target not in successors[node_name]:
+                            successors[node_name].append(target)
+                            in_degree[target] += 1
+
+        forced_entry = set()
+        for node in nodes:
+            node_class = node.get("node_class", node.get("node_name", ""))
+            for et in ENTRY_TYPES:
+                if et in node_class or et in node.get("node_name", ""):
+                    forced_entry.add(node["node_name"])
+                    break
+        for node in nodes:
+            n = node["node_name"]
+            if in_degree[n] == 0:
+                for pin in node.get("pins", []):
+                    if pin.get("direction") == "Output" and pin.get("type") in ("exec", ""):
+                        forced_entry.add(n)
+                        break
+
+        column = {}
+        queue = deque()
+        for n in node_names:
+            if in_degree[n] == 0 or n in forced_entry:
+                column[n] = 0
+                queue.append(n)
+
+        while queue:
+            n = queue.popleft()
+            for s in successors[n]:
+                if column.get(s, -1) < column[n] + 1:
+                    column[s] = column[n] + 1
+                in_degree[s] -= 1
+                if in_degree[s] <= 0 and s not in column:
+                    queue.append(s)
+
+        for n in node_names:
+            if n not in column:
+                column[n] = 0
+
+        col_row = {}
+        positions = {}
+        for node in nodes:
+            n = node["node_name"]
+            c = column[n]
+            r = col_row.get(c, 0)
+            positions[n] = (c * x_step, r * y_step)
+            col_row[c] = r + 1
+
+        errors = []
+        positioned = 0
+        for n, (px, py) in positions.items():
+            result_str = unreal.MCPythonHelper.set_blueprint_node_position(bp, graph_name, n, px, py)
+            result = json.loads(result_str)
+            if result.get("success"):
+                positioned += 1
+            else:
+                errors.append(f"{n}: {result.get('message', '?')}")
+
+        return json.dumps({
+            "success": True,
+            "positioned": positioned,
+            "total": len(node_names),
+            "errors": errors,
+            "message": f"Auto-layout complete: {positioned}/{len(node_names)} nodes positioned.",
+        })
     except Exception as e:
         return json.dumps({"success": False, "message": str(e), "traceback": traceback.format_exc()})
