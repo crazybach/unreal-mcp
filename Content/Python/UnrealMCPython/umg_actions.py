@@ -244,3 +244,93 @@ def ue_compile_widget_blueprint(asset_path: str = None) -> str:
         return result_json
     except Exception as e:
         return json.dumps({"success": False, "message": str(e), "traceback": traceback.format_exc()})
+
+
+def ue_set_slot_layout(asset_path: str = None, widget_name: str = None,
+                       anchor_min_x: float = 0.5, anchor_min_y: float = 0.5,
+                       anchor_max_x: float = 0.5, anchor_max_y: float = 0.5,
+                       offset_x: float = 0.0, offset_y: float = 0.0,
+                       size_x: float = 100.0, size_y: float = 40.0) -> str:
+    """Sets CanvasPanelSlot layout (anchors + offset + size) on a widget."""
+    if not asset_path:
+        return json.dumps({"success": False, "message": "Required parameter 'asset_path' is missing."})
+    if not widget_name:
+        return json.dumps({"success": False, "message": "Required parameter 'widget_name' is missing."})
+    try:
+        widget_bp, err = _load_widget_blueprint(asset_path)
+        if err:
+            return err
+        result = unreal.MCPythonHelper.umg_set_slot_layout(
+            widget_bp, widget_name,
+            anchor_min_x, anchor_min_y, anchor_max_x, anchor_max_y,
+            offset_x, offset_y, size_x, size_y
+        )
+        unreal.EditorAssetLibrary.save_asset(widget_bp.get_path_name(), only_if_is_dirty=False)
+        return result
+    except Exception as e:
+        return json.dumps({"success": False, "message": str(e), "traceback": traceback.format_exc()})
+
+
+def ue_set_text_style(asset_path: str = None, widget_name: str = None,
+                      font_size: int = 24,
+                      color_r: float = 1.0, color_g: float = 1.0,
+                      color_b: float = 1.0, color_a: float = 1.0,
+                      outline_size: int = 0) -> str:
+    """Sets font size, text color, and outline size on a TextBlock widget."""
+    if not asset_path:
+        return json.dumps({"success": False, "message": "Required parameter 'asset_path' is missing."})
+    if not widget_name:
+        return json.dumps({"success": False, "message": "Required parameter 'widget_name' is missing."})
+    try:
+        widget_bp, err = _load_widget_blueprint(asset_path)
+        if err:
+            return err
+        result = unreal.MCPythonHelper.umg_set_text_style(
+            widget_bp, widget_name, font_size,
+            color_r, color_g, color_b, color_a,
+            outline_size
+        )
+        unreal.EditorAssetLibrary.save_asset(widget_bp.get_path_name(), only_if_is_dirty=False)
+        return result
+    except Exception as e:
+        return json.dumps({"success": False, "message": str(e), "traceback": traceback.format_exc()})
+
+
+def ue_get_widget_property(asset_path: str = None, widget_name: str = None,
+                           property_name: str = None) -> str:
+    """Gets the value of a C++ UPROPERTY on a named widget."""
+    if not asset_path:
+        return json.dumps({"success": False, "message": "Required parameter 'asset_path' is missing."})
+    if not widget_name:
+        return json.dumps({"success": False, "message": "Required parameter 'widget_name' is missing."})
+    if not property_name:
+        return json.dumps({"success": False, "message": "Required parameter 'property_name' is missing."})
+    try:
+        widget_bp, err = _load_widget_blueprint(asset_path)
+        if err:
+            return err
+        return unreal.MCPythonHelper.umg_get_widget_property(widget_bp, widget_name, property_name)
+    except Exception as e:
+        return json.dumps({"success": False, "message": str(e), "traceback": traceback.format_exc()})
+
+
+def ue_set_widget_property(asset_path: str = None, widget_name: str = None,
+                           property_name: str = None, value: str = None) -> str:
+    """Sets a C++ UPROPERTY on a named widget from a string value."""
+    if not asset_path:
+        return json.dumps({"success": False, "message": "Required parameter 'asset_path' is missing."})
+    if not widget_name:
+        return json.dumps({"success": False, "message": "Required parameter 'widget_name' is missing."})
+    if not property_name:
+        return json.dumps({"success": False, "message": "Required parameter 'property_name' is missing."})
+    if value is None:
+        return json.dumps({"success": False, "message": "Required parameter 'value' is missing."})
+    try:
+        widget_bp, err = _load_widget_blueprint(asset_path)
+        if err:
+            return err
+        result = unreal.MCPythonHelper.umg_set_widget_property(widget_bp, widget_name, property_name, value)
+        unreal.EditorAssetLibrary.save_asset(widget_bp.get_path_name(), only_if_is_dirty=False)
+        return result
+    except Exception as e:
+        return json.dumps({"success": False, "message": str(e), "traceback": traceback.format_exc()})

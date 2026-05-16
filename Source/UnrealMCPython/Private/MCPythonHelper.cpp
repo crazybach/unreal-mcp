@@ -53,6 +53,8 @@
 #include "Engine/Blueprint.h"
 #include "UObject/UnrealType.h"
 #include "UObject/TextProperty.h"
+#include "Components/CanvasPanelSlot.h"
+#include "Components/TextBlock.h"
 
 TArray<UObject*> UMCPythonHelper::GetAllEditedAssets()
 {
@@ -1047,6 +1049,8 @@ FString UMCPythonHelper::GetBlueprintGraphInfo(UBlueprint* Blueprint, const FStr
                 PinObj->SetStringField(TEXT("sub_type"), Pin->PinType.PinSubCategoryObject->GetName());
             if (!Pin->DefaultValue.IsEmpty())
                 PinObj->SetStringField(TEXT("default_value"), Pin->DefaultValue);
+            if (Pin->DefaultObject)
+                PinObj->SetStringField(TEXT("default_object"), Pin->DefaultObject->GetPathName());
 
             // Linked pins
             if (Pin->LinkedTo.Num() > 0)
@@ -2229,6 +2233,140 @@ FString UMCPythonHelper::UmgSetWidgetIsVariable(UBlueprint* WidgetBP, const FStr
     return SerializeJsonObj(Result);
 }
 
+// ─── UmgSetSlotLayout UFUNCTION ──────────────────────────────────────────────
+
+FString UMCPythonHelper::UmgSetSlotLayout(UBlueprint* WidgetBP, const FString& WidgetName,
+    float AnchorMinX, float AnchorMinY, float AnchorMaxX, float AnchorMaxY,
+    float OffsetX, float OffsetY, float SizeX, float SizeY)
+{
+    UWidgetBlueprint* WB = Cast<UWidgetBlueprint>(WidgetBP);
+    if (!WB || !WB->WidgetTree)
+        return UmgErrorJson(TEXT("Not a WidgetBlueprint or no WidgetTree."));
+
+    UWidget* Widget = WB->WidgetTree->FindWidget(FName(*WidgetName));
+    if (!Widget)
+        return UmgErrorJson(FString::Printf(TEXT("Widget '%s' not found."), *WidgetName));
+
+    UCanvasPanelSlot* CPS = Cast<UCanvasPanelSlot>(Widget->Slot);
+    if (!CPS)
+        return UmgErrorJson(FString::Printf(TEXT("Widget '%s' is not in a CanvasPanel."), *WidgetName));
+
+    CPS->Modify();
+    FAnchorData Data;
+    Data.Anchors.Minimum = FVector2D(AnchorMinX, AnchorMinY);
+    Data.Anchors.Maximum = FVector2D(AnchorMaxX, AnchorMaxY);
+    Data.Offsets = FMargin(OffsetX, OffsetY, SizeX, SizeY);
+    Data.Alignment = FVector2D(0.5f, 0.5f);
+    CPS->SetLayout(Data);
+
+    FBlueprintEditorUtils::MarkBlueprintAsModified(WB);
+
+    TSharedPtr<FJsonObject> R = MakeShared<FJsonObject>();
+    R->SetBoolField(TEXT("success"), true);
+    R->SetStringField(TEXT("widget"), WidgetName);
+    R->SetStringField(TEXT("message"), FString::Printf(TEXT("Layout set on '%s'."), *WidgetName));
+    return SerializeJsonObj(R);
+}
+
+// ─── UmgSetTextStyle UFUNCTION ───────────────────────────────────────────────
+
+FString UMCPythonHelper::UmgSetTextStyle(UBlueprint* WidgetBP, const FString& WidgetName,
+    int32 FontSize, float ColorR, float ColorG, float ColorB, float ColorA,
+    int32 OutlineSize)
+{
+    UWidgetBlueprint* WB = Cast<UWidgetBlueprint>(WidgetBP);
+    if (!WB || !WB->WidgetTree)
+        return UmgErrorJson(TEXT("Not a WidgetBlueprint or no WidgetTree."));
+
+    UWidget* Widget = WB->WidgetTree->FindWidget(FName(*WidgetName));
+    if (!Widget)
+        return UmgErrorJson(FString::Printf(TEXT("Widget '%s' not found."), *WidgetName));
+
+    UTextBlock* TB = Cast<UTextBlock>(Widget);
+    if (!TB)
+        return UmgErrorJson(FString::Printf(TEXT("Widget '%s' is not a TextBlock."), *WidgetName));
+
+    TB->Modify();
+
+    FSlateFontInfo Font = TB->GetFont();
+    Font.Size = FontSize;
+    if (OutlineSize >= 0)
+        Font.OutlineSettings.OutlineSize = OutlineSize;
+    TB->SetFont(Font);
+
+    FLinearColor Color(ColorR, ColorG, ColorB, ColorA);
+    TB->SetColorAndOpacity(FSlateColor(Color));
+
+    FBlueprintEditorUtils::MarkBlueprintAsModified(WB);
+
+    TSharedPtr<FJsonObject> R = MakeShared<FJsonObject>();
+    R->SetBoolField(TEXT("success"), true);
+    R->SetStringField(TEXT("widget"), WidgetName);
+    R->SetStringField(TEXT("message"), FString::Printf(TEXT("Text style set on '%s': size=%d outline=%d."), *WidgetName, FontSize, OutlineSize));
+    return SerializeJsonObj(R);
+}
+
+// ─── UmgGetWidgetProperty UFUNCTION ──────────────────────────────────────────
+
+FString UMCPythonHelper::UmgGetWidgetProperty(UBlueprint* WidgetBP, const FString& WidgetName, const FString& PropertyName)
+{
+    UWidgetBlueprint* WB = Cast<UWidgetBlueprint>(WidgetBP);
+    if (!WB || !WB->WidgetTree)
+        return UmgErrorJson(TEXT("Not a WidgetBlueprint or no WidgetTree."));
+
+    UWidget* Widget = WB->WidgetTree->FindWidget(FName(*WidgetName));
+    if (!Widget)
+        return UmgErrorJson(FString::Printf(TEXT("Widget '%s' not found."), *WidgetName));
+
+    FProperty* Prop = Widget->GetClass()->FindPropertyByName(FName(*PropertyName));
+    if (!Prop)
+        return UmgErrorJson(FString::Printf(TEXT("Property '%s' not found on widget '%s'."), *PropertyName, *WidgetName));
+
+    FString ValueStr;
+    const void* ValueAddr = Prop->ContainerPtrToValuePtr<void>(Widget);
+    Prop->ExportTextItem_Direct(ValueStr, ValueAddr, nullptr, Widget, PPF_None);
+
+    TSharedPtr<FJsonObject> R = MakeShared<FJsonObject>();
+    R->SetBoolField(TEXT("success"), true);
+    R->SetStringField(TEXT("widget"), WidgetName);
+    R->SetStringField(TEXT("property"), PropertyName);
+    R->SetStringField(TEXT("value"), ValueStr);
+    R->SetStringField(TEXT("type"), Prop->GetCPPType());
+    return SerializeJsonObj(R);
+}
+
+// ─── UmgSetWidgetProperty UFUNCTION ──────────────────────────────────────────
+
+FString UMCPythonHelper::UmgSetWidgetProperty(UBlueprint* WidgetBP, const FString& WidgetName, const FString& PropertyName, const FString& Value)
+{
+    UWidgetBlueprint* WB = Cast<UWidgetBlueprint>(WidgetBP);
+    if (!WB || !WB->WidgetTree)
+        return UmgErrorJson(TEXT("Not a WidgetBlueprint or no WidgetTree."));
+
+    UWidget* Widget = WB->WidgetTree->FindWidget(FName(*WidgetName));
+    if (!Widget)
+        return UmgErrorJson(FString::Printf(TEXT("Widget '%s' not found."), *WidgetName));
+
+    FProperty* Prop = Widget->GetClass()->FindPropertyByName(FName(*PropertyName));
+    if (!Prop)
+        return UmgErrorJson(FString::Printf(TEXT("Property '%s' not found on widget '%s'."), *PropertyName, *WidgetName));
+
+    Widget->Modify();
+    void* ValueAddr = Prop->ContainerPtrToValuePtr<void>(Widget);
+    const TCHAR* ImportResult = Prop->ImportText_Direct(*Value, ValueAddr, Widget, PPF_None);
+    if (!ImportResult)
+        return UmgErrorJson(FString::Printf(TEXT("Failed to set property '%s' to '%s'."), *PropertyName, *Value));
+
+    FBlueprintEditorUtils::MarkBlueprintAsModified(WB);
+
+    TSharedPtr<FJsonObject> R = MakeShared<FJsonObject>();
+    R->SetBoolField(TEXT("success"), true);
+    R->SetStringField(TEXT("widget"), WidgetName);
+    R->SetStringField(TEXT("property"), PropertyName);
+    R->SetStringField(TEXT("value"), Value);
+    return SerializeJsonObj(R);
+}
+
 // ─── AddComponentToBlueprint UFUNCTION ───────────────────────────────────────
 
 FString UMCPythonHelper::AddComponentToBlueprint(UBlueprint* Blueprint,
@@ -2284,6 +2422,151 @@ FString UMCPythonHelper::AddComponentToBlueprint(UBlueprint* Blueprint,
     R->SetStringField(TEXT("component_class"), CompClass->GetName());
     R->SetStringField(TEXT("message"),
         FString::Printf(TEXT("Added '%s' (%s)."), *ComponentName, *CompClass->GetName()));
+    return SerializeJsonObj(R);
+}
+
+// ─── ListBlueprintComponents UFUNCTION ───────────────────────────────────────
+
+FString UMCPythonHelper::ListBlueprintComponents(UBlueprint* Blueprint)
+{
+    if (!Blueprint)
+        return MakeJsonError(TEXT("Invalid Blueprint."));
+
+    USimpleConstructionScript* SCS = Blueprint->SimpleConstructionScript;
+    if (!SCS)
+        return MakeJsonError(TEXT("Blueprint has no SimpleConstructionScript."));
+
+    TArray<TSharedPtr<FJsonValue>> ComponentsArr;
+    for (USCS_Node* Node : SCS->GetAllNodes())
+    {
+        if (!Node) continue;
+        TSharedPtr<FJsonObject> Obj = MakeShared<FJsonObject>();
+        Obj->SetStringField(TEXT("variable_name"), Node->GetVariableName().ToString());
+        if (Node->ComponentTemplate)
+        {
+            Obj->SetStringField(TEXT("class"), Node->ComponentTemplate->GetClass()->GetName());
+            Obj->SetBoolField(TEXT("is_native"), false);
+        }
+        else
+        {
+            Obj->SetStringField(TEXT("class"), TEXT("Unknown"));
+            Obj->SetBoolField(TEXT("is_native"), false);
+        }
+        USCS_Node* Parent = nullptr;
+        for (USCS_Node* Candidate : SCS->GetAllNodes())
+        {
+            if (Candidate && Candidate->GetChildNodes().Contains(Node))
+            {
+                Parent = Candidate;
+                break;
+            }
+        }
+        Obj->SetStringField(TEXT("parent"), Parent ? Parent->GetVariableName().ToString() : TEXT(""));
+        ComponentsArr.Add(MakeShareable(new FJsonValueObject(Obj)));
+    }
+
+    TSharedPtr<FJsonObject> R = MakeShared<FJsonObject>();
+    R->SetBoolField(TEXT("success"), true);
+    R->SetArrayField(TEXT("components"), ComponentsArr);
+    R->SetNumberField(TEXT("count"), ComponentsArr.Num());
+    return SerializeJsonObj(R);
+}
+
+// ─── RemoveComponentFromBlueprint UFUNCTION ───────────────────────────────────
+
+FString UMCPythonHelper::RemoveComponentFromBlueprint(UBlueprint* Blueprint, const FString& ComponentName)
+{
+    if (!Blueprint)
+        return MakeJsonError(TEXT("Invalid Blueprint."));
+
+    USimpleConstructionScript* SCS = Blueprint->SimpleConstructionScript;
+    if (!SCS)
+        return MakeJsonError(TEXT("Blueprint has no SimpleConstructionScript."));
+
+    USCS_Node* Node = SCS->FindSCSNode(FName(*ComponentName));
+    if (!Node)
+        return MakeJsonError(FString::Printf(TEXT("Component '%s' not found in SCS."), *ComponentName));
+
+    FString RemovedClass = Node->ComponentTemplate ? Node->ComponentTemplate->GetClass()->GetName() : TEXT("Unknown");
+
+    SCS->RemoveNodeAndPromoteChildren(Node);
+    FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+
+    TSharedPtr<FJsonObject> R = MakeShared<FJsonObject>();
+    R->SetBoolField(TEXT("success"), true);
+    R->SetStringField(TEXT("component_name"), ComponentName);
+    R->SetStringField(TEXT("class"), RemovedClass);
+    R->SetStringField(TEXT("message"), FString::Printf(TEXT("Component '%s' (%s) removed."), *ComponentName, *RemovedClass));
+    return SerializeJsonObj(R);
+}
+
+// ─── SetComponentProperty UFUNCTION ──────────────────────────────────────────
+
+FString UMCPythonHelper::SetComponentProperty(UBlueprint* Blueprint,
+    const FString& ComponentName, const FString& PropertyName, const FString& Value)
+{
+    if (!Blueprint)
+        return MakeJsonError(TEXT("Invalid Blueprint."));
+
+    USimpleConstructionScript* SCS = Blueprint->SimpleConstructionScript;
+    if (!SCS)
+        return MakeJsonError(TEXT("Blueprint has no SimpleConstructionScript."));
+
+    USCS_Node* Node = SCS->FindSCSNode(FName(*ComponentName));
+    if (!Node)
+        return MakeJsonError(FString::Printf(TEXT("Component '%s' not found in SCS."), *ComponentName));
+
+    UObject* Template = Node->ComponentTemplate;
+    if (!Template)
+        return MakeJsonError(FString::Printf(TEXT("Component '%s' has no template."), *ComponentName));
+
+    FProperty* Prop = Template->GetClass()->FindPropertyByName(FName(*PropertyName));
+    if (!Prop)
+        return MakeJsonError(FString::Printf(TEXT("Property '%s' not found on component '%s'."), *PropertyName, *ComponentName));
+
+    Template->Modify();
+    void* ValueAddr = Prop->ContainerPtrToValuePtr<void>(Template);
+    const TCHAR* ImportResult = Prop->ImportText_Direct(*Value, ValueAddr, Template, PPF_None);
+    if (!ImportResult)
+        return MakeJsonError(FString::Printf(TEXT("Failed to set property '%s' to '%s'."), *PropertyName, *Value));
+
+    FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+
+    TSharedPtr<FJsonObject> R = MakeShared<FJsonObject>();
+    R->SetBoolField(TEXT("success"), true);
+    R->SetStringField(TEXT("component"), ComponentName);
+    R->SetStringField(TEXT("property"), PropertyName);
+    R->SetStringField(TEXT("value"), Value);
+    return SerializeJsonObj(R);
+}
+
+// ─── SetBlueprintNodePosition UFUNCTION ──────────────────────────────────────
+
+FString UMCPythonHelper::SetBlueprintNodePosition(UBlueprint* Blueprint,
+    const FString& GraphName, const FString& NodeName, float PosX, float PosY)
+{
+    if (!Blueprint)
+        return MakeJsonError(TEXT("Invalid Blueprint."));
+
+    UEdGraph* Graph = FindGraphByName(Blueprint, GraphName);
+    if (!Graph)
+        return MakeJsonError(FString::Printf(TEXT("Graph '%s' not found."), *GraphName));
+
+    UEdGraphNode* Node = FindBPNodeByName(Graph, NodeName);
+    if (!Node)
+        return MakeJsonError(FString::Printf(TEXT("Node '%s' not found in graph '%s'."), *NodeName, *GraphName));
+
+    Node->Modify();
+    Node->NodePosX = (int32)PosX;
+    Node->NodePosY = (int32)PosY;
+
+    FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+
+    TSharedPtr<FJsonObject> R = MakeShared<FJsonObject>();
+    R->SetBoolField(TEXT("success"), true);
+    R->SetStringField(TEXT("node"), NodeName);
+    R->SetNumberField(TEXT("pos_x"), PosX);
+    R->SetNumberField(TEXT("pos_y"), PosY);
     return SerializeJsonObj(R);
 }
 

@@ -199,3 +199,148 @@ async def compile_blueprint(
     """Compiles a Blueprint and returns the result."""
     params = {"asset_path": asset_path}
     return await send_unreal_action(BP_ACTIONS_MODULE, params)
+
+
+# ─── Component Management Tools ───────────────────────────────────────────────
+
+@blueprint_mcp.tool(
+    name="list_blueprint_components",
+    description=(
+        "Lists all SCS (Simple Construction Script) components on a Blueprint. "
+        "Returns each component's variable name, class, and parent component name."
+    ),
+    tags={"unreal", "blueprint", "component", "list", "read"}
+)
+async def list_blueprint_components(
+    asset_path: Annotated[str, Field(description="Path to the Blueprint asset.")]
+) -> dict:
+    return await send_unreal_action(BP_ACTIONS_MODULE, {"asset_path": asset_path})
+
+
+@blueprint_mcp.tool(
+    name="add_component_to_blueprint",
+    description=(
+        "Adds a new component to a Blueprint's SCS. "
+        "component_class_path is a fully qualified UE class path such as '/Script/Engine.SphereComponent', "
+        "'/Script/Engine.CameraComponent', '/Script/Engine.StaticMeshComponent'. "
+        "component_name becomes the variable name. "
+        "parent_component_name: variable name of the parent SCS node, or empty to attach to the existing root."
+    ),
+    tags={"unreal", "blueprint", "component", "add", "write"}
+)
+async def add_component_to_blueprint(
+    asset_path: Annotated[str, Field(description="Path to the Blueprint asset.")],
+    component_class_path: Annotated[str, Field(description="UE class path (e.g. '/Script/Engine.SphereComponent').")],
+    component_name: Annotated[str, Field(description="Variable name for the new component.")],
+    location_x: Annotated[float, Field(description="Relative X offset from parent.")] = 0.0,
+    location_y: Annotated[float, Field(description="Relative Y offset from parent.")] = 0.0,
+    location_z: Annotated[float, Field(description="Relative Z offset from parent.")] = 0.0,
+    rotation_pitch: Annotated[float, Field(description="Relative pitch in degrees.")] = 0.0,
+    rotation_yaw: Annotated[float, Field(description="Relative yaw in degrees.")] = 0.0,
+    rotation_roll: Annotated[float, Field(description="Relative roll in degrees.")] = 0.0,
+    parent_component_name: Annotated[str, Field(description="Variable name of the parent component, or empty for root.")] = ""
+) -> dict:
+    return await send_unreal_action(BP_ACTIONS_MODULE, {
+        "asset_path": asset_path,
+        "component_class_path": component_class_path,
+        "component_name": component_name,
+        "location_x": location_x,
+        "location_y": location_y,
+        "location_z": location_z,
+        "rotation_pitch": rotation_pitch,
+        "rotation_yaw": rotation_yaw,
+        "rotation_roll": rotation_roll,
+        "parent_component_name": parent_component_name,
+    })
+
+
+@blueprint_mcp.tool(
+    name="remove_component_from_blueprint",
+    description=(
+        "Removes a component from a Blueprint's SCS by its variable name. "
+        "Children of the removed node are promoted to the removed node's parent (safe remove). "
+        "Use list_blueprint_components first to find the correct variable name."
+    ),
+    tags={"unreal", "blueprint", "component", "remove", "delete", "write"}
+)
+async def remove_component_from_blueprint(
+    asset_path: Annotated[str, Field(description="Path to the Blueprint asset.")],
+    component_name: Annotated[str, Field(description="Variable name of the component to remove.")]
+) -> dict:
+    return await send_unreal_action(BP_ACTIONS_MODULE, {
+        "asset_path": asset_path,
+        "component_name": component_name,
+    })
+
+
+@blueprint_mcp.tool(
+    name="set_component_property",
+    description=(
+        "Sets a property on a component template in a Blueprint's SCS. "
+        "The value must be a string representation accepted by Unreal's property import: "
+        "vectors as '(X=0,Y=0,Z=100)', bools as 'True'/'False', floats as '50.0'. "
+        "Use list_blueprint_components to find the correct component_name first."
+    ),
+    tags={"unreal", "blueprint", "component", "property", "set", "write"}
+)
+async def set_component_property(
+    asset_path: Annotated[str, Field(description="Path to the Blueprint asset.")],
+    component_name: Annotated[str, Field(description="Variable name of the target component.")],
+    property_name: Annotated[str, Field(description="Property name (C++ name, e.g. 'SphereRadius', 'RelativeLocation').")],
+    value: Annotated[str, Field(description="String representation of the value (e.g. '50.0', '(X=0,Y=0,Z=100)').")]
+) -> dict:
+    return await send_unreal_action(BP_ACTIONS_MODULE, {
+        "asset_path": asset_path,
+        "component_name": component_name,
+        "property_name": property_name,
+        "value": value,
+    })
+
+
+# ─── Graph Layout Tools ────────────────────────────────────────────────────────
+
+@blueprint_mcp.tool(
+    name="set_blueprint_node_position",
+    description="Moves a single Blueprint graph node to the given canvas coordinates. "
+                "Use get_blueprint_graph_info to find node names first.",
+    tags={"unreal", "blueprint", "node", "position", "layout", "write"}
+)
+async def set_blueprint_node_position(
+    asset_path: Annotated[str, Field(description="Path to the Blueprint asset.")],
+    node_name: Annotated[str, Field(description="Name of the node to reposition.")],
+    pos_x: Annotated[float, Field(description="X position on the graph canvas.")] = 0.0,
+    pos_y: Annotated[float, Field(description="Y position on the graph canvas.")] = 0.0,
+    graph_name: Annotated[str, Field(description="Name of the graph. Usually 'EventGraph'.")] = "EventGraph"
+) -> dict:
+    return await send_unreal_action(BP_ACTIONS_MODULE, {
+        "asset_path": asset_path,
+        "graph_name": graph_name,
+        "node_name": node_name,
+        "pos_x": pos_x,
+        "pos_y": pos_y,
+    })
+
+
+@blueprint_mcp.tool(
+    name="auto_layout_graph",
+    description=(
+        "Automatically lays out all nodes in a Blueprint graph using topological sort. "
+        "Entry nodes (BeginPlay, Tick, custom events, input events) are placed at column 0; "
+        "each subsequent execution step moves one column to the right. "
+        "Within a column, nodes are stacked vertically. "
+        "x_step and y_step control pixel spacing between columns and rows respectively."
+    ),
+    tags={"unreal", "blueprint", "layout", "graph", "auto", "write"}
+)
+async def auto_layout_graph(
+    asset_path: Annotated[str, Field(description="Path to the Blueprint asset.")],
+    graph_name: Annotated[str, Field(description="Name of the graph. Usually 'EventGraph'.")] = "EventGraph",
+    x_step: Annotated[float, Field(description="Horizontal pixel spacing between columns.")] = 380.0,
+    y_step: Annotated[float, Field(description="Vertical pixel spacing between rows.")] = 200.0,
+) -> dict:
+    return await send_unreal_action(BP_ACTIONS_MODULE, {
+        "asset_path": asset_path,
+        "graph_name": graph_name,
+        "x_step": x_step,
+        "y_step": y_step,
+    })
