@@ -26,7 +26,9 @@
 
 ---
 
-Unreal MCP bridges AI assistants (Claude, Cursor, VS Code Copilot) and the Unreal Editor through the [Model Context Protocol](https://modelcontextprotocol.io/). Spawn actors, edit materials, build Blueprint graphs, construct Behavior Trees, design UMG Widget Blueprints — all from natural language.
+Unreal MCP connects AI assistants to the Unreal Editor through the [Model Context Protocol](https://modelcontextprotocol.io/). Spawn actors, build Blueprint graphs, construct Behavior Trees, design UMG widgets, edit materials — all from natural language.
+
+84 built-in tools, with direct access to all of Unreal Engine's Python API — any BlueprintCallable function, any editor subsystem, anything the engine exposes to Python. No C++, no recompilation.
 
 <p align="center">
   <a href="https://youtu.be/V7KyjzFlBLk?si=QaqVqmt6YL59DHg4">
@@ -36,27 +38,20 @@ Unreal MCP bridges AI assistants (Claude, Cursor, VS Code Copilot) and the Unrea
   <sub>Click to watch the demo on YouTube</sub>
 </p>
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/GenOrca/Screenshot/refs/heads/main/unreal-mcp/Screenshot%202025-06-02%20025111.png" width="400">
-  <img src="https://raw.githubusercontent.com/GenOrca/Screenshot/refs/heads/main/unreal-mcp/Screenshot%202025-06-02%20025115.png" width="400">
-  <img src="https://raw.githubusercontent.com/GenOrca/Screenshot/refs/heads/main/unreal-mcp/Screenshot%202025-06-02%20025120.png" width="400">
-</p>
-
 ## Features
 
 | Category | Capabilities | Tools |
 |---|---|:---:|
 | **Actor Manipulation** | Spawn, duplicate, transform, delete actors. Surface raycasting. View frustum queries. Property get/set. | 17 |
+| **Level Management** | Create and open levels. List level actors with optional class filter. Configure world settings (gravity, time dilation). | 4 |
 | **Asset Management** | Search and filter assets by name/type. Static mesh detail retrieval. | 2 |
 | **Material System** | Create and connect expressions. Material instance parameters (scalar, vector, texture, static switch). Recompilation. | 11 |
-| **Blueprint Graph** | Read graph structure, nodes, pins, and variables. Add, connect, remove nodes. Build and compile entire graphs. | 10 |
+| **Blueprint Graph** | Read graph structure, nodes, pins, and variables. Add, connect, remove nodes. Build and compile entire graphs. SCS component management. Auto layout. | 16 |
 | **Behavior Tree** | Create and read Behavior Trees. Manage Blackboard assets and keys. Build complete BT hierarchies. | 12 |
-| **UMG Widget Blueprint** | Create Widget Blueprints. Add/remove widgets (15 types). Set properties, canvas slot layout. Compile. | 6 |
+| **UMG Widget Blueprint** | Create Widget Blueprints. Add/remove widgets (15 types). Set properties, slot layout, text style, and widget C++ properties. Compile. | 10 |
 | **Editor Tools** | Selection management. Material/mesh replacement on actors. Blueprint-based replacement. | 6 |
 | **Game Settings** | Game mode configuration. Input action and mapping setup. | 3 |
-| **Utilities** | Output log retrieval for debugging. | 1 |
-
-> **68 tools** across 9 categories — all accessible through natural language.
+| **Utilities** | Execute arbitrary Python with full access to Unreal Engine's Python API. Output log retrieval. LiveCoding compile. | 3 |
 
 ## Installation
 
@@ -181,6 +176,18 @@ Just describe what you want in natural language:
 </details>
 
 <details>
+<summary><strong>Level Management</strong> (4 tools)</summary>
+
+| Tool | Description |
+|---|---|
+| `create_level` | Create a new empty level and open it |
+| `load_level` | Open an existing level by content-browser path |
+| `list_level_actors` | List all actors in the current level (optional class filter) |
+| `set_world_settings` | Set gravity and time dilation for the current level |
+
+</details>
+
+<details>
 <summary><strong>Asset Management</strong> (2 tools)</summary>
 
 | Tool | Description |
@@ -210,7 +217,7 @@ Just describe what you want in natural language:
 </details>
 
 <details>
-<summary><strong>Blueprint Graph</strong> (10 tools)</summary>
+<summary><strong>Blueprint Graph</strong> (16 tools)</summary>
 
 | Tool | Description |
 |---|---|
@@ -224,6 +231,12 @@ Just describe what you want in natural language:
 | `remove_blueprint_node` | Remove a node |
 | `build_blueprint_graph` | Build entire graph from JSON |
 | `compile_blueprint` | Compile Blueprint |
+| `list_blueprint_components` | List all SCS components on a Blueprint |
+| `add_component_to_blueprint` | Add a component to Blueprint's SCS |
+| `remove_component_from_blueprint` | Remove a component from Blueprint's SCS |
+| `set_component_property` | Set a property on a Blueprint component template |
+| `set_blueprint_node_position` | Move a Blueprint graph node to given coordinates |
+| `auto_layout_graph` | Auto-layout all nodes in a Blueprint graph |
 
 </details>
 
@@ -248,7 +261,7 @@ Just describe what you want in natural language:
 </details>
 
 <details>
-<summary><strong>UMG Widget Blueprint</strong> (6 tools)</summary>
+<summary><strong>UMG Widget Blueprint</strong> (10 tools)</summary>
 
 | Tool | Description |
 |---|---|
@@ -258,10 +271,12 @@ Just describe what you want in natural language:
 | `set_widget_properties` | Set text, font size, color, visibility, canvas slot layout |
 | `remove_widget` | Remove a widget from the tree |
 | `compile_widget_blueprint` | Compile and validate the Widget Blueprint |
+| `set_slot_layout` | Set CanvasPanelSlot layout (anchor, position, size, alignment) |
+| `set_text_style` | Set font size, text color, and outline on a TextBlock |
+| `get_widget_property` | Get a C++ UPROPERTY value on a named widget |
+| `set_widget_property` | Set a C++ UPROPERTY value on a named widget |
 
 **Supported widget types:** CanvasPanel, TextBlock, Button, Image, HorizontalBox, VerticalBox, Border, Overlay, ScrollBox, SizeBox, CheckBox, EditableText, EditableTextBox, ProgressBar, Slider
-
-**Canvas slot properties** (when parent is CanvasPanel): `slot_position`, `slot_size`, `slot_alignment`, `slot_z_order`
 
 </details>
 
@@ -280,7 +295,7 @@ Just describe what you want in natural language:
 </details>
 
 <details>
-<summary><strong>Game Settings</strong> (3 tools) &amp; <strong>Utilities</strong> (1 tool)</summary>
+<summary><strong>Game Settings</strong> (3 tools) &amp; <strong>Utilities</strong> (3 tools)</summary>
 
 | Tool | Description |
 |---|---|
@@ -288,19 +303,10 @@ Just describe what you want in natural language:
 | `add_input_action` | Add input action |
 | `add_input_mapping` | Add input mapping |
 | `get_output_log` | Retrieve Unreal output log |
+| `execute_python` | Execute arbitrary Python code with full access to Unreal Engine's Python API |
+| `livecoding_compile` | Trigger a LiveCoding C++ hot-reload compile without restarting the editor |
 
 </details>
-
-## How It Works
-
-```
-┌─────────────────┐         MCP         ┌─────────────────┐   TCP/JSON   ┌──────────────────┐
-│   AI Assistant   │  ◄──────────────►  │   MCP Server    │  ◄────────►  │  Unreal Engine   │
-│ (Claude, Cursor) │                     │   (Python/uv)   │              │  (Plugin + Python)│
-└─────────────────┘                     └─────────────────┘              └──────────────────┘
-```
-
-The MCP server translates AI tool calls into Python commands executed inside Unreal Engine's embedded Python interpreter.
 
 ## Troubleshooting
 
@@ -310,11 +316,6 @@ The MCP server translates AI tool calls into Python commands executed inside Unr
 | Path errors | Check the absolute path in your client config |
 | Plugin not visible | Restart UE and confirm both plugins are enabled |
 | Tools not showing | Restart your MCP client and verify the config |
-
-## References
-
-- [Model Context Protocol](https://modelcontextprotocol.io/)
-- [Unreal Engine Python API](https://dev.epicgames.com/documentation/en-us/unreal-engine/python-api/)
 
 ## Contributing
 
