@@ -1,6 +1,8 @@
 // Copyright (c) 2025 GenOrca (by zenoengine). All Rights Reserved.
 
 #include "MCPythonHelper.h"
+#include "Engine/SCS_Node.h"
+#include "Engine/SimpleConstructionScript.h"
 #include "WidgetBlueprint.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Widget.h"
@@ -42,10 +44,15 @@
 #include "K2Node_VariableGet.h"
 #include "K2Node_VariableSet.h"
 #include "K2Node_MacroInstance.h"
+#include "K2Node_DynamicCast.h"
+#include "K2Node_InputKey.h"
+#include "K2Node_SpawnActorFromClass.h"
 #include "EdGraphSchema_K2.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Engine/Blueprint.h"
+#include "UObject/UnrealType.h"
+#include "UObject/TextProperty.h"
 
 TArray<UObject*> UMCPythonHelper::GetAllEditedAssets()
 {
@@ -1260,14 +1267,45 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
             return nullptr;
         }
 
-        UK2Node_CustomEvent* CustomNode = UK2Node_CustomEvent::CreateFromFunction(
-            FVector2D(PosX, PosY), Graph, EventName, nullptr, false);
+        FGraphNodeCreator<UK2Node_CustomEvent> Creator(*Graph);
+        UK2Node_CustomEvent* CustomNode = Creator.CreateNode(false);
         if (!CustomNode)
         {
             OutError = FString::Printf(TEXT("Failed to create CustomEvent '%s'."), *EventName);
             return nullptr;
         }
+        CustomNode->CustomFunctionName = FName(*EventName);
+        CustomNode->NodePosX = PosX;
+        CustomNode->NodePosY = PosY;
+        Creator.Finalize();
         NewNode = CustomNode;
+    }
+    else if (NodeType == TEXT("CastTo"))
+    {
+        FString CastClass;
+        if (!NodeJson->TryGetStringField(TEXT("cast_class"), CastClass))
+        {
+            OutError = TEXT("CastTo node missing 'cast_class'.");
+            return nullptr;
+        }
+        // Try full path first, then common module prefixes
+        UClass* TargetClass = LoadClass<UObject>(nullptr, *CastClass);
+        if (!TargetClass)
+            TargetClass = LoadClass<UObject>(nullptr, *FString::Printf(TEXT("/Script/Engine.%s"), *CastClass));
+        if (!TargetClass)
+            TargetClass = LoadClass<UObject>(nullptr, *FString::Printf(TEXT("/Script/AIModule.%s"), *CastClass));
+        if (!TargetClass)
+        {
+            OutError = FString::Printf(TEXT("CastTo: class '%s' not found."), *CastClass);
+            return nullptr;
+        }
+        FGraphNodeCreator<UK2Node_DynamicCast> Creator(*Graph);
+        UK2Node_DynamicCast* CastNode = Creator.CreateNode(false);
+        CastNode->TargetType = TargetClass;
+        CastNode->NodePosX = PosX;
+        CastNode->NodePosY = PosY;
+        Creator.Finalize();
+        NewNode = CastNode;
     }
     else if (NodeType == TEXT("Branch"))
     {
@@ -1296,9 +1334,27 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
             return nullptr;
         }
 
+        FString VarClass;
+        const bool bHasExternalClass = NodeJson->TryGetStringField(TEXT("variable_class"), VarClass) && !VarClass.IsEmpty();
+
         FGraphNodeCreator<UK2Node_VariableGet> Creator(*Graph);
         UK2Node_VariableGet* GetNode = Creator.CreateNode(false);
-        GetNode->VariableReference.SetSelfMember(FName(*VarName));
+
+        if (bHasExternalClass)
+        {
+            UClass* OwnerClass = LoadClass<UObject>(nullptr, *VarClass);
+            if (!OwnerClass)
+                OwnerClass = LoadClass<UObject>(nullptr, *FString::Printf(TEXT("/Script/Engine.%s"), *VarClass));
+            if (OwnerClass)
+                GetNode->VariableReference.SetExternalMember(FName(*VarName), OwnerClass);
+            else
+                GetNode->VariableReference.SetSelfMember(FName(*VarName));
+        }
+        else
+        {
+            GetNode->VariableReference.SetSelfMember(FName(*VarName));
+        }
+
         GetNode->NodePosX = PosX;
         GetNode->NodePosY = PosY;
         Creator.Finalize();
@@ -1313,9 +1369,27 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
             return nullptr;
         }
 
+        FString VarClass;
+        const bool bHasExternalClass = NodeJson->TryGetStringField(TEXT("variable_class"), VarClass) && !VarClass.IsEmpty();
+
         FGraphNodeCreator<UK2Node_VariableSet> Creator(*Graph);
         UK2Node_VariableSet* SetNode = Creator.CreateNode(false);
-        SetNode->VariableReference.SetSelfMember(FName(*VarName));
+
+        if (bHasExternalClass)
+        {
+            UClass* OwnerClass = LoadClass<UObject>(nullptr, *VarClass);
+            if (!OwnerClass)
+                OwnerClass = LoadClass<UObject>(nullptr, *FString::Printf(TEXT("/Script/Engine.%s"), *VarClass));
+            if (OwnerClass)
+                SetNode->VariableReference.SetExternalMember(FName(*VarName), OwnerClass);
+            else
+                SetNode->VariableReference.SetSelfMember(FName(*VarName));
+        }
+        else
+        {
+            SetNode->VariableReference.SetSelfMember(FName(*VarName));
+        }
+
         SetNode->NodePosX = PosX;
         SetNode->NodePosY = PosY;
         Creator.Finalize();
@@ -1377,9 +1451,34 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
         Creator.Finalize();
         NewNode = MacroNode;
     }
+    else if (NodeType == TEXT("InputKey"))
+    {
+        FString KeyName;
+        if (!NodeJson->TryGetStringField(TEXT("key_name"), KeyName))
+        {
+            OutError = TEXT("InputKey node missing 'key_name'.");
+            return nullptr;
+        }
+        FGraphNodeCreator<UK2Node_InputKey> Creator(*Graph);
+        UK2Node_InputKey* KeyNode = Creator.CreateNode(false);
+        KeyNode->InputKey = FKey(*KeyName);
+        KeyNode->NodePosX = PosX;
+        KeyNode->NodePosY = PosY;
+        Creator.Finalize();
+        NewNode = KeyNode;
+    }
+    else if (NodeType == TEXT("SpawnActor"))
+    {
+        FGraphNodeCreator<UK2Node_SpawnActorFromClass> Creator(*Graph);
+        UK2Node_SpawnActorFromClass* SpawnNode = Creator.CreateNode(false);
+        SpawnNode->NodePosX = PosX;
+        SpawnNode->NodePosY = PosY;
+        Creator.Finalize();
+        NewNode = SpawnNode;
+    }
     else
     {
-        OutError = FString::Printf(TEXT("Unknown node type '%s'. Supported: CallFunction, Event, CustomEvent, Branch, Sequence, VariableGet, VariableSet, MacroInstance."), *NodeType);
+        OutError = FString::Printf(TEXT("Unknown node type '%s'. Supported: CallFunction, Event, CustomEvent, CastTo, Branch, Sequence, VariableGet, VariableSet, MacroInstance, InputKey, SpawnActor."), *NodeType);
         return nullptr;
     }
 
@@ -1495,13 +1594,18 @@ FString UMCPythonHelper::ConnectBlueprintPins(UBlueprint* Blueprint, const FStri
         return MakeJsonError(FString::Printf(TEXT("Cannot connect pins with same direction (%s)."),
             SourcePin->Direction == EGPD_Input ? TEXT("both Input") : TEXT("both Output")));
 
-    // Check if connection is allowed by the schema
+    // Check if connection is allowed by the schema and handle BREAK_OTHERS
     const UEdGraphSchema* Schema = Graph->GetSchema();
     if (Schema)
     {
         FPinConnectionResponse Response = Schema->CanCreateConnection(SourcePin, TargetPin);
         if (Response.Response == CONNECT_RESPONSE_DISALLOW)
             return MakeJsonError(FString::Printf(TEXT("Connection not allowed: %s"), *Response.Message.ToString()));
+        // Break existing connections when schema requires it (e.g. exec output already connected)
+        if (Response.Response == CONNECT_RESPONSE_BREAK_OTHERS_A)
+            SourcePin->BreakAllPinLinks();
+        else if (Response.Response == CONNECT_RESPONSE_BREAK_OTHERS_B)
+            TargetPin->BreakAllPinLinks();
     }
 
     SourcePin->MakeLinkTo(TargetPin);
@@ -1797,6 +1901,133 @@ FString UMCPythonHelper::CompileBlueprint(UBlueprint* Blueprint)
     return SerializeJsonObj(Result);
 }
 
+// ─── SetBlueprintCDOProperty UFUNCTION ───────────────────────────────────────
+
+FString UMCPythonHelper::SetBlueprintCDOProperty(UBlueprint* Blueprint, const FString& PropertyName, const FString& ValueStr)
+{
+    if (!Blueprint)
+        return MakeJsonError(TEXT("Blueprint is null."));
+
+    UClass* GenClass = Blueprint->GeneratedClass;
+    if (!GenClass)
+        return MakeJsonError(TEXT("Blueprint has no GeneratedClass."));
+
+    UObject* CDO = GenClass->GetDefaultObject(false);
+    if (!CDO)
+        return MakeJsonError(TEXT("Could not get CDO."));
+
+    FProperty* FoundProp = nullptr;
+    for (TFieldIterator<FProperty> It(GenClass, EFieldIterationFlags::IncludeSuper); It; ++It)
+    {
+        if (It->GetName().Equals(PropertyName, ESearchCase::IgnoreCase))
+        {
+            FoundProp = *It;
+            break;
+        }
+    }
+
+    if (!FoundProp)
+        return MakeJsonError(FString::Printf(TEXT("Property '%s' not found on '%s' or any parent class."), *PropertyName, *Blueprint->GetName()));
+
+    void* PropAddr = FoundProp->ContainerPtrToValuePtr<void>(CDO);
+
+    auto MarkModified = [&]()
+    {
+        CDO->Modify();
+        Blueprint->Modify();
+        FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+    };
+
+    // TSubclassOf<T>
+    if (FClassProperty* ClassProp = CastField<FClassProperty>(FoundProp))
+    {
+        UClass* TargetClass = LoadClass<UObject>(nullptr, *ValueStr);
+        if (!TargetClass)
+        {
+            UBlueprint* ValBP = Cast<UBlueprint>(StaticLoadObject(UBlueprint::StaticClass(), nullptr, *ValueStr));
+            if (ValBP) TargetClass = ValBP->GeneratedClass;
+        }
+        if (!TargetClass)
+            return MakeJsonError(FString::Printf(TEXT("Could not resolve class from '%s'."), *ValueStr));
+        ClassProp->SetPropertyValue(PropAddr, TargetClass);
+        MarkModified();
+        TSharedPtr<FJsonObject> R = MakeShareable(new FJsonObject());
+        R->SetBoolField(TEXT("success"), true);
+        R->SetStringField(TEXT("property"), PropertyName);
+        R->SetStringField(TEXT("value"), TargetClass->GetName());
+        R->SetStringField(TEXT("message"), FString::Printf(TEXT("ClassProperty '%s' set to '%s'."), *PropertyName, *TargetClass->GetName()));
+        return SerializeJsonObj(R);
+    }
+
+    // TSoftClassPtr<T>
+    if (FSoftClassProperty* SoftClassProp = CastField<FSoftClassProperty>(FoundProp))
+    {
+        FSoftObjectPath SoftPath(ValueStr);
+        FSoftObjectPtr SoftPtr(SoftPath);
+        SoftClassProp->SetPropertyValue(PropAddr, SoftPtr);
+        MarkModified();
+        return MakeJsonSuccess(FString::Printf(TEXT("SoftClassProperty '%s' set to '%s'."), *PropertyName, *ValueStr));
+    }
+
+    // UObject* refs (must come after class properties since FClassProperty extends FObjectProperty)
+    if (FObjectProperty* ObjProp = CastField<FObjectProperty>(FoundProp))
+    {
+        UObject* LoadedObj = StaticLoadObject(ObjProp->PropertyClass, nullptr, *ValueStr);
+        if (!LoadedObj)
+            return MakeJsonError(FString::Printf(TEXT("Could not load object from '%s'."), *ValueStr));
+        ObjProp->SetObjectPropertyValue(PropAddr, LoadedObj);
+        MarkModified();
+        return MakeJsonSuccess(FString::Printf(TEXT("ObjectProperty '%s' set."), *PropertyName));
+    }
+
+    // bool
+    if (FBoolProperty* BoolProp = CastField<FBoolProperty>(FoundProp))
+    {
+        bool bVal = (ValueStr == TEXT("true") || ValueStr == TEXT("True") || ValueStr == TEXT("1"));
+        BoolProp->SetPropertyValue(PropAddr, bVal);
+        MarkModified();
+        return MakeJsonSuccess(FString::Printf(TEXT("BoolProperty '%s' set to %s."), *PropertyName, bVal ? TEXT("true") : TEXT("false")));
+    }
+
+    // int / float / double
+    if (FNumericProperty* NumProp = CastField<FNumericProperty>(FoundProp))
+    {
+        if (NumProp->IsFloatingPoint())
+            NumProp->SetFloatingPointPropertyValue(PropAddr, FCString::Atod(*ValueStr));
+        else
+            NumProp->SetIntPropertyValue(PropAddr, (int64)FCString::Atoi64(*ValueStr));
+        MarkModified();
+        return MakeJsonSuccess(FString::Printf(TEXT("NumericProperty '%s' set to '%s'."), *PropertyName, *ValueStr));
+    }
+
+    // FString
+    if (FStrProperty* StrProp = CastField<FStrProperty>(FoundProp))
+    {
+        StrProp->SetPropertyValue(PropAddr, ValueStr);
+        MarkModified();
+        return MakeJsonSuccess(FString::Printf(TEXT("StrProperty '%s' set."), *PropertyName));
+    }
+
+    // FName
+    if (FNameProperty* NameProp = CastField<FNameProperty>(FoundProp))
+    {
+        NameProp->SetPropertyValue(PropAddr, FName(*ValueStr));
+        MarkModified();
+        return MakeJsonSuccess(FString::Printf(TEXT("NameProperty '%s' set."), *PropertyName));
+    }
+
+    // FText
+    if (FTextProperty* TextProp = CastField<FTextProperty>(FoundProp))
+    {
+        TextProp->SetPropertyValue(PropAddr, FText::FromString(ValueStr));
+        MarkModified();
+        return MakeJsonSuccess(FString::Printf(TEXT("TextProperty '%s' set."), *PropertyName));
+    }
+
+    return MakeJsonError(FString::Printf(TEXT("Unsupported property type '%s' for property '%s'."),
+        *FoundProp->GetClass()->GetName(), *PropertyName));
+}
+
 // ─── UMG Widget Blueprint Helpers ─────────────────────────────────────────────
 
 namespace
@@ -1883,6 +2114,9 @@ FString UMCPythonHelper::UmgAddWidget(UBlueprint* WidgetBP, const FString& Widge
     if (!NewWidget)
         return UmgErrorJson(FString::Printf(TEXT("Failed to construct widget '%s'."), *WidgetName));
 
+    // Mark as variable so Blueprint graph can reference it directly
+    NewWidget->bIsVariable = true;
+
     FString ActualParent;
     bool bIsRoot = false;
 
@@ -1967,4 +2201,138 @@ FString UMCPythonHelper::UmgRemoveWidget(UBlueprint* WidgetBP, const FString& Wi
     Result->SetBoolField(TEXT("success"), true);
     Result->SetStringField(TEXT("message"), FString::Printf(TEXT("Widget '%s' removed successfully."), *WidgetName));
     return SerializeJsonObj(Result);
+}
+
+// ─── UmgSetWidgetIsVariable UFUNCTION ────────────────────────────────────────
+
+FString UMCPythonHelper::UmgSetWidgetIsVariable(UBlueprint* WidgetBP, const FString& WidgetName, bool bIsVariable)
+{
+    UWidgetBlueprint* WB = Cast<UWidgetBlueprint>(WidgetBP);
+    if (!WB) return UmgErrorJson(TEXT("Asset is not a WidgetBlueprint."));
+
+    UWidgetTree* WT = WB->WidgetTree;
+    if (!WT) return UmgErrorJson(TEXT("Widget tree is null."));
+
+    UWidget* Widget = WT->FindWidget(FName(*WidgetName));
+    if (!Widget)
+        return UmgErrorJson(FString::Printf(TEXT("Widget '%s' not found."), *WidgetName));
+
+    Widget->Modify();
+    Widget->bIsVariable = bIsVariable;
+
+    FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(WB);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("success"), true);
+    Result->SetStringField(TEXT("widget_name"), WidgetName);
+    Result->SetBoolField(TEXT("is_variable"), bIsVariable);
+    return SerializeJsonObj(Result);
+}
+
+// ─── AddComponentToBlueprint UFUNCTION ───────────────────────────────────────
+
+FString UMCPythonHelper::AddComponentToBlueprint(UBlueprint* Blueprint,
+    const FString& ComponentClassPath,
+    const FString& ComponentName,
+    float LocationX, float LocationY, float LocationZ,
+    float RotationPitch, float RotationYaw, float RotationRoll,
+    const FString& ParentComponentName)
+{
+    if (!Blueprint)
+        return MakeJsonError(TEXT("Invalid Blueprint."));
+
+    USimpleConstructionScript* SCS = Blueprint->SimpleConstructionScript;
+    if (!SCS)
+        return MakeJsonError(TEXT("Blueprint has no SimpleConstructionScript."));
+
+    UClass* CompClass = LoadClass<UActorComponent>(nullptr, *ComponentClassPath);
+    if (!CompClass)
+        return MakeJsonError(FString::Printf(TEXT("Component class not found: %s"), *ComponentClassPath));
+
+    USCS_Node* NewNode = SCS->CreateNode(CompClass, FName(*ComponentName));
+    if (!NewNode)
+        return MakeJsonError(TEXT("Failed to create SCS node."));
+
+    if (USceneComponent* SceneComp = Cast<USceneComponent>(NewNode->ComponentTemplate))
+    {
+        SceneComp->SetRelativeLocation(FVector(LocationX, LocationY, LocationZ));
+        SceneComp->SetRelativeRotation(FRotator(RotationPitch, RotationYaw, RotationRoll));
+    }
+
+    if (!ParentComponentName.IsEmpty())
+    {
+        USCS_Node* ParentNode = SCS->FindSCSNode(FName(*ParentComponentName));
+        if (ParentNode)
+            ParentNode->AddChildNode(NewNode);
+        else
+            SCS->AddNode(NewNode);
+    }
+    else
+    {
+        const TArray<USCS_Node*>& RootNodes = SCS->GetRootNodes();
+        if (RootNodes.Num() > 0)
+            RootNodes[0]->AddChildNode(NewNode);
+        else
+            SCS->AddNode(NewNode);
+    }
+
+    FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+
+    TSharedPtr<FJsonObject> R = MakeShared<FJsonObject>();
+    R->SetBoolField(TEXT("success"), true);
+    R->SetStringField(TEXT("node_name"), NewNode->GetVariableName().ToString());
+    R->SetStringField(TEXT("component_class"), CompClass->GetName());
+    R->SetStringField(TEXT("message"),
+        FString::Printf(TEXT("Added '%s' (%s)."), *ComponentName, *CompClass->GetName()));
+    return SerializeJsonObj(R);
+}
+
+// ─── SetBlueprintNodePinDefault ──────────────────────────────────────────────
+
+FString UMCPythonHelper::SetBlueprintNodePinDefault(UBlueprint* Blueprint,
+    const FString& GraphName, const FString& NodeName,
+    const FString& PinName, const FString& Value)
+{
+    if (!Blueprint)
+        return MakeJsonError(TEXT("Invalid Blueprint."));
+
+    UEdGraph* Graph = FindGraphByName(Blueprint, GraphName);
+    if (!Graph)
+        return MakeJsonError(FString::Printf(TEXT("Graph '%s' not found."), *GraphName));
+
+    UEdGraphNode* Node = FindBPNodeByName(Graph, NodeName);
+    if (!Node)
+        return MakeJsonError(FString::Printf(TEXT("Node '%s' not found."), *NodeName));
+
+    UEdGraphPin* Pin = FindPinByName(Node, PinName, EGPD_Input);
+    if (!Pin)
+    {
+        TArray<FString> Names;
+        for (UEdGraphPin* P : Node->Pins) { if (P && !P->bHidden && P->Direction == EGPD_Input) Names.Add(P->GetName()); }
+        return MakeJsonError(FString::Printf(TEXT("Input pin '%s' not found. Available: %s"), *PinName, *FString::Join(Names, TEXT(", "))));
+    }
+
+    // For object-type pins, try loading the asset
+    if (Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_Object ||
+        Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_SoftObject ||
+        Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_Class ||
+        Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_SoftClass)
+    {
+        UObject* Asset = StaticLoadObject(UObject::StaticClass(), nullptr, *Value);
+        if (!Asset)
+            return MakeJsonError(FString::Printf(TEXT("Could not load asset: %s"), *Value));
+        Pin->DefaultObject = Asset;
+        Pin->DefaultValue = TEXT("");
+    }
+    else
+    {
+        Pin->DefaultValue = Value;
+    }
+
+    FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+
+    TSharedPtr<FJsonObject> R = MakeShared<FJsonObject>();
+    R->SetBoolField(TEXT("success"), true);
+    R->SetStringField(TEXT("message"), FString::Printf(TEXT("Set pin '%s' on '%s' to '%s'."), *PinName, *NodeName, *Value));
+    return SerializeJsonObj(R);
 }

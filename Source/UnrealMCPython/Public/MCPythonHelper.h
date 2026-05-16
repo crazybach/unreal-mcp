@@ -164,6 +164,11 @@ public:
     UFUNCTION(BlueprintCallable, Category="Editor|MCPython")
     static FString CompileBlueprint(UBlueprint* Blueprint);
 
+    /** Set any CDO property including inherited C++ UPROPERTYs (e.g. DefaultPawnClass on GameModeBase BPs).
+     *  Uses TFieldIterator with IncludeSuper to bypass the Python set_editor_property limitation. */
+    UFUNCTION(BlueprintCallable, Category="Editor|MCPython")
+    static FString SetBlueprintCDOProperty(UBlueprint* Blueprint, const FString& PropertyName, const FString& ValueStr);
+
     // ─── UMG Widget Blueprint Helpers ─────────────────────────────────────────
     // UE 5.7 Python bindings mark UWidgetTree::RootWidget, AllWidgets, and
     // ConstructWidget as protected, so direct Python access is blocked.
@@ -184,4 +189,29 @@ public:
     /** Remove a widget from the widget tree. Returns JSON. */
     UFUNCTION(BlueprintCallable, Category="Editor|MCPython")
     static FString UmgRemoveWidget(UBlueprint* WidgetBP, const FString& WidgetName);
+
+    /** Set bIsVariable on a named widget so Blueprint can access it as a variable. */
+    UFUNCTION(BlueprintCallable, Category="Editor|MCPython")
+    static FString UmgSetWidgetIsVariable(UBlueprint* WidgetBP, const FString& WidgetName, bool bIsVariable);
+
+    /** Add a component to a Blueprint's SCS.
+     *  ComponentClassPath e.g. "/Script/Engine.CameraComponent"
+     *  ParentComponentName: name of the parent SCS node, or "" to attach to root */
+    UFUNCTION(BlueprintCallable, Category="Editor|MCPython")
+    static FString AddComponentToBlueprint(UBlueprint* Blueprint,
+        const FString& ComponentClassPath,
+        const FString& ComponentName,
+        float LocationX, float LocationY, float LocationZ,
+        float RotationPitch, float RotationYaw, float RotationRoll,
+        const FString& ParentComponentName);
+
+    /** Set a pin default on a blueprint node.
+     *  For object pins, Value should be an asset path like "/Engine/BasicShapes/Sphere.Sphere".
+     *  For numeric/bool pins, Value is the literal string like "3.14" or "true". */
+    UFUNCTION(BlueprintCallable, Category="Editor|MCPython")
+    static FString SetBlueprintNodePinDefault(UBlueprint* Blueprint,
+        const FString& GraphName,
+        const FString& NodeName,
+        const FString& PinName,
+        const FString& Value);
 };
