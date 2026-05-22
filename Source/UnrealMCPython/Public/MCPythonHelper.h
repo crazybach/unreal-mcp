@@ -140,6 +140,44 @@ public:
     UFUNCTION(BlueprintCallable, Category="Editor|MCPython")
     static FString ListBlueprintVariables(UBlueprint* Blueprint);
 
+    // ─── Variable Lifecycle ──────────────────────────────────────────
+
+    /** Add a new variable to a Blueprint.
+     *  var_type: bool, int, float, double, string, name, text, byte,
+     *  vector, rotator, transform, linear_color, object, class, softobject, softclass,
+     *  interface, struct, enum.
+     *  var_sub_type: for object/struct/enum, the asset path to the class/struct/enum. */
+    UFUNCTION(BlueprintCallable, Category="Editor|MCPython")
+    static FString AddBlueprintVariable(UBlueprint* Blueprint,
+        const FString& VarName, const FString& VarType,
+        const FString& VarSubType, bool bIsArray, const FString& DefaultValue);
+
+    /** Remove a variable from a Blueprint by name. */
+    UFUNCTION(BlueprintCallable, Category="Editor|MCPython")
+    static FString RemoveBlueprintVariable(UBlueprint* Blueprint, const FString& VarName);
+
+    /** Set a property/metadata on an existing Blueprint variable.
+     *  Supported properties: category, tooltip, default_value,
+     *  expose_on_spawn, instance_editable, blueprint_read_only,
+     *  blueprint_read_only_owner, private, exposetoowner, bitmask. */
+    UFUNCTION(BlueprintCallable, Category="Editor|MCPython")
+    static FString SetBlueprintVariableProperty(UBlueprint* Blueprint,
+        const FString& VarName, const FString& Property, const FString& Value);
+
+    // ─── Function Graph Management ───────────────────────────────────
+
+    /** List all function graphs in a Blueprint. Returns JSON array of {name, entry_node}. */
+    UFUNCTION(BlueprintCallable, Category="Editor|MCPython")
+    static FString ListFunctionGraphs(UBlueprint* Blueprint);
+
+    /** Create a new function graph in a Blueprint. Returns JSON with the graph name. */
+    UFUNCTION(BlueprintCallable, Category="Editor|MCPython")
+    static FString AddFunctionGraph(UBlueprint* Blueprint, const FString& FuncName);
+
+    /** Remove a function graph from a Blueprint by name. Returns JSON. */
+    UFUNCTION(BlueprintCallable, Category="Editor|MCPython")
+    static FString RemoveFunctionGraph(UBlueprint* Blueprint, const FString& FuncName);
+
     /** Add a single node to a Blueprint graph from JSON description */
     UFUNCTION(BlueprintCallable, Category="Editor|MCPython")
     static FString AddBlueprintNode(UBlueprint* Blueprint, const FString& GraphName, const FString& NodeJson);

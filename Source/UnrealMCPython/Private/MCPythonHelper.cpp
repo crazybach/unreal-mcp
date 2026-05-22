@@ -11,6 +11,7 @@
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "Toolkits/AssetEditorToolkit.h"
 #include "BlueprintEditor.h"
+#include "Widgets/Docking/SDockTab.h"
 #include "BehaviorTree/BehaviorTree.h"
 #include "BehaviorTree/BlackboardData.h"
 #include "BehaviorTree/BTCompositeNode.h"
@@ -25,7 +26,6 @@
 #include "BehaviorTreeGraphNode_Task.h"
 #include "BehaviorTreeGraphNode_Decorator.h"
 #include "BehaviorTreeGraphNode_Service.h"
-#include "BehaviorTreeGraphNode_SimpleParallel.h"
 #include "BehaviorTreeGraphNode_SubtreeTask.h"
 #include "EdGraphSchema_BehaviorTree.h"
 #include "EdGraph/EdGraph.h"
@@ -39,6 +39,7 @@
 #include "K2Node_Event.h"
 #include "K2Node_CustomEvent.h"
 #include "K2Node_CallFunction.h"
+#include "K2Node_FunctionEntry.h"
 #include "K2Node_IfThenElse.h"
 #include "K2Node_ExecutionSequence.h"
 #include "K2Node_VariableGet.h"
@@ -47,6 +48,7 @@
 #include "K2Node_DynamicCast.h"
 #include "K2Node_InputKey.h"
 #include "K2Node_SpawnActorFromClass.h"
+#include "K2Node_AsyncAction.h"
 #include "EdGraphSchema_K2.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
@@ -55,6 +57,8 @@
 #include "UObject/TextProperty.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Components/TextBlock.h"
+#include "Engine/UserDefinedEnum.h"
+#include "Engine/UserDefinedStruct.h"
 
 TArray<UObject*> UMCPythonHelper::GetAllEditedAssets()
 {
@@ -653,20 +657,13 @@ static UBehaviorTreeGraphNode* CreateBTGraphNodeRecursive(
     // Classify node type
     bool bIsComposite = NodeClass->IsChildOf(UBTCompositeNode::StaticClass());
     bool bIsTask = NodeClass->IsChildOf(UBTTaskNode::StaticClass());
-    bool bIsSimpleParallel = CheckClassAncestor(NodeClass, TEXT("BTComposite_SimpleParallel"));
     bool bIsSubtreeTask = CheckClassAncestor(NodeClass, TEXT("BTTask_RunBehavior"))
                        || CheckClassAncestor(NodeClass, TEXT("BTTask_RunBehaviorDynamic"));
 
     // Create appropriate graph node
     UBehaviorTreeGraphNode* GraphNode = nullptr;
 
-    if (bIsSimpleParallel)
-    {
-        FGraphNodeCreator<UBehaviorTreeGraphNode_SimpleParallel> Creator(*Graph);
-        GraphNode = Creator.CreateNode(false);
-        Creator.Finalize();
-    }
-    else if (bIsComposite)
+    if (bIsComposite)
     {
         FGraphNodeCreator<UBehaviorTreeGraphNode_Composite> Creator(*Graph);
         GraphNode = Creator.CreateNode(false);
@@ -1009,6 +1006,217 @@ static UEdGraphPin* FindPinByName(UEdGraphNode* Node, const FString& PinName, EE
     return nullptr;
 }
 
+// ─── Variable Type Helper ──────────────────────────────────────────────
+
+static bool ParseVariableType(const FString& VarTypeStr,
+    const FString& VarSubType, bool bIsArray, FEdGraphPinType& OutPinType)
+{
+    FName Category;
+    UObject* SubObj = nullptr;
+
+    auto ResolveSubObject = [&](const FString& SubTypeStr) -> UObject*
+    {
+        if (SubTypeStr.IsEmpty()) return nullptr;
+        // Try as a class
+        UClass* AsClass = LoadClass<UObject>(nullptr, *SubTypeStr);
+        if (AsClass) return AsClass;
+        // Try as a Blueprint asset
+        UBlueprint* AsBP = Cast<UBlueprint>(StaticLoadObject(UBlueprint::StaticClass(), nullptr, *SubTypeStr));
+        if (AsBP && AsBP->GeneratedClass) return AsBP->GeneratedClass;
+        // Try as a user-defined struct
+        UUserDefinedStruct* AsStruct = LoadObject<UUserDefinedStruct>(nullptr, *SubTypeStr);
+        if (AsStruct) return AsStruct;
+        // Try as a user-defined enum
+        UUserDefinedEnum* AsEnum = LoadObject<UUserDefinedEnum>(nullptr, *SubTypeStr);
+        if (AsEnum) return AsEnum;
+        // Try as a C++ struct
+        UScriptStruct* AsScriptStruct = LoadObject<UScriptStruct>(nullptr, *SubTypeStr);
+        if (AsScriptStruct) return AsScriptStruct;
+        // Try as an enum
+        UEnum* AsEnumCpp = LoadObject<UEnum>(nullptr, *SubTypeStr);
+        if (AsEnumCpp) return AsEnumCpp;
+        return nullptr;
+    };
+
+    auto CategoryEquals = [&](const FString& Name) -> bool
+    {
+        return VarTypeStr.Equals(Name, ESearchCase::IgnoreCase);
+    };
+
+    if (CategoryEquals(TEXT("bool")))
+    {
+        Category = UEdGraphSchema_K2::PC_Boolean;
+    }
+    else if (CategoryEquals(TEXT("int")) || CategoryEquals(TEXT("int32")))
+    {
+        Category = UEdGraphSchema_K2::PC_Int;
+    }
+    else if (CategoryEquals(TEXT("int64")))
+    {
+        Category = UEdGraphSchema_K2::PC_Int64;
+    }
+    else if (CategoryEquals(TEXT("float")) || CategoryEquals(TEXT("real")) || CategoryEquals(TEXT("double")))
+    {
+        Category = UEdGraphSchema_K2::PC_Real;
+    }
+    else if (CategoryEquals(TEXT("byte")))
+    {
+        Category = UEdGraphSchema_K2::PC_Byte;
+    }
+    else if (CategoryEquals(TEXT("string")))
+    {
+        Category = UEdGraphSchema_K2::PC_String;
+    }
+    else if (CategoryEquals(TEXT("name")))
+    {
+        Category = UEdGraphSchema_K2::PC_Name;
+    }
+    else if (CategoryEquals(TEXT("text")))
+    {
+        Category = UEdGraphSchema_K2::PC_Text;
+    }
+    else if (CategoryEquals(TEXT("vector")))
+    {
+        Category = UEdGraphSchema_K2::PC_Struct;
+        SubObj = TBaseStructure<FVector>::Get();
+    }
+    else if (CategoryEquals(TEXT("rotator")))
+    {
+        Category = UEdGraphSchema_K2::PC_Struct;
+        SubObj = TBaseStructure<FRotator>::Get();
+    }
+    else if (CategoryEquals(TEXT("transform")))
+    {
+        Category = UEdGraphSchema_K2::PC_Struct;
+        SubObj = TBaseStructure<FTransform>::Get();
+    }
+    else if (CategoryEquals(TEXT("linear_color")) || CategoryEquals(TEXT("color")))
+    {
+        Category = UEdGraphSchema_K2::PC_Struct;
+        SubObj = TBaseStructure<FLinearColor>::Get();
+    }
+    else if (CategoryEquals(TEXT("object")))
+    {
+        Category = UEdGraphSchema_K2::PC_Object;
+        SubObj = ResolveSubObject(VarSubType);
+        if (!SubObj) SubObj = UObject::StaticClass();
+    }
+    else if (CategoryEquals(TEXT("class")))
+    {
+        Category = UEdGraphSchema_K2::PC_Class;
+        SubObj = ResolveSubObject(VarSubType);
+        if (!SubObj) SubObj = UObject::StaticClass();
+    }
+    else if (CategoryEquals(TEXT("softobject")))
+    {
+        Category = UEdGraphSchema_K2::PC_SoftObject;
+        SubObj = ResolveSubObject(VarSubType);
+        if (!SubObj) SubObj = UObject::StaticClass();
+    }
+    else if (CategoryEquals(TEXT("softclass")))
+    {
+        Category = UEdGraphSchema_K2::PC_SoftClass;
+        SubObj = ResolveSubObject(VarSubType);
+        if (!SubObj) SubObj = UObject::StaticClass();
+    }
+    else if (CategoryEquals(TEXT("interface")))
+    {
+        Category = UEdGraphSchema_K2::PC_Interface;
+    }
+    else if (CategoryEquals(TEXT("struct")))
+    {
+        Category = UEdGraphSchema_K2::PC_Struct;
+        SubObj = ResolveSubObject(VarSubType);
+    }
+    else if (CategoryEquals(TEXT("enum")))
+    {
+        Category = UEdGraphSchema_K2::PC_Byte;
+        SubObj = ResolveSubObject(VarSubType);
+    }
+    else
+    {
+        return false;
+    }
+
+    OutPinType.PinCategory = Category;
+    OutPinType.PinSubCategoryObject = SubObj;
+    OutPinType.ContainerType = bIsArray ? EPinContainerType::Array : EPinContainerType::None;
+    return true;
+}
+
+static bool ApplyPinDefault(UEdGraphNode* Node, UEdGraphPin* Pin, const TSharedPtr<FJsonValue>& JsonValue, FString& OutError)
+{
+    if (!Node || !Pin || !JsonValue.IsValid())
+    {
+        return true;
+    }
+
+    const UEdGraphSchema* Schema = Node->GetSchema();
+    if (!Schema)
+    {
+        OutError = FString::Printf(TEXT("Unable to resolve schema for pin '%s'."), *Pin->GetName());
+        return false;
+    }
+
+    FString DefaultValue;
+    if (JsonValue->TryGetString(DefaultValue))
+    {
+        Schema->TrySetDefaultValue(*Pin, DefaultValue);
+        return true;
+    }
+
+    const TSharedPtr<FJsonObject>* DefaultObjectJson = nullptr;
+    if (JsonValue->TryGetObject(DefaultObjectJson) && DefaultObjectJson && DefaultObjectJson->IsValid())
+    {
+        FString DefaultObjectPath;
+        if ((*DefaultObjectJson)->TryGetStringField(TEXT("default_object"), DefaultObjectPath) && !DefaultObjectPath.IsEmpty())
+        {
+            UObject* DefaultObject = LoadObject<UObject>(nullptr, *DefaultObjectPath);
+            if (!DefaultObject)
+            {
+                OutError = FString::Printf(TEXT("Unable to load default object '%s' for pin '%s'."), *DefaultObjectPath, *Pin->GetName());
+                return false;
+            }
+
+            Schema->TrySetDefaultObject(*Pin, DefaultObject);
+        }
+
+        if ((*DefaultObjectJson)->TryGetStringField(TEXT("default_value"), DefaultValue))
+        {
+            Schema->TrySetDefaultValue(*Pin, DefaultValue);
+        }
+    }
+
+    return true;
+}
+
+static bool SetAsyncActionProxyProperties(UK2Node_AsyncAction* AsyncNode, UClass* FactoryClass, UClass* ProxyClass, const FName FactoryFunctionName, FString& OutError)
+{
+    if (!AsyncNode || !FactoryClass || !ProxyClass || FactoryFunctionName.IsNone())
+    {
+        OutError = TEXT("Invalid AsyncAction proxy configuration.");
+        return false;
+    }
+
+    FNameProperty* FactoryFunctionProperty = FindFProperty<FNameProperty>(
+        UK2Node_BaseAsyncTask::StaticClass(), TEXT("ProxyFactoryFunctionName"));
+    FObjectPropertyBase* FactoryClassProperty = FindFProperty<FObjectPropertyBase>(
+        UK2Node_BaseAsyncTask::StaticClass(), TEXT("ProxyFactoryClass"));
+    FObjectPropertyBase* ProxyClassProperty = FindFProperty<FObjectPropertyBase>(
+        UK2Node_BaseAsyncTask::StaticClass(), TEXT("ProxyClass"));
+
+    if (!FactoryFunctionProperty || !FactoryClassProperty || !ProxyClassProperty)
+    {
+        OutError = TEXT("Failed to resolve UK2Node_BaseAsyncTask proxy properties.");
+        return false;
+    }
+
+    FactoryFunctionProperty->SetPropertyValue_InContainer(AsyncNode, FactoryFunctionName);
+    FactoryClassProperty->SetObjectPropertyValue_InContainer(AsyncNode, FactoryClass);
+    ProxyClassProperty->SetObjectPropertyValue_InContainer(AsyncNode, ProxyClass);
+    return true;
+}
+
 // ─── GetBlueprintGraphInfo ───────────────────────────────────────────────────
 
 FString UMCPythonHelper::GetBlueprintGraphInfo(UBlueprint* Blueprint, const FString& GraphName)
@@ -1170,6 +1378,286 @@ FString UMCPythonHelper::ListBlueprintVariables(UBlueprint* Blueprint)
     Result->SetNumberField(TEXT("count"), VarsArr.Num());
     Result->SetArrayField(TEXT("variables"), VarsArr);
     return SerializeJsonObj(Result);
+}
+
+// ─── AddBlueprintVariable ─────────────────────────────────────────────
+
+FString UMCPythonHelper::AddBlueprintVariable(UBlueprint* Blueprint,
+    const FString& VarName, const FString& VarType,
+    const FString& VarSubType, bool bIsArray, const FString& DefaultValue)
+{
+    if (!Blueprint)
+        return MakeJsonError(TEXT("Invalid Blueprint."));
+
+    if (VarName.IsEmpty())
+        return MakeJsonError(TEXT("VarName cannot be empty."));
+
+    // Check for name collision
+    for (const FBPVariableDescription& Existing : Blueprint->NewVariables)
+    {
+        if (Existing.VarName.ToString().Equals(VarName, ESearchCase::IgnoreCase) ||
+            Existing.VarName.ToString() == VarName)
+        {
+            return MakeJsonError(FString::Printf(TEXT("Variable '%s' already exists."), *VarName));
+        }
+    }
+
+    // Parse type
+    FEdGraphPinType PinType;
+    if (!ParseVariableType(VarType, VarSubType, bIsArray, PinType))
+    {
+        return MakeJsonError(FString::Printf(
+            TEXT("Unsupported variable type: '%s'. Supported: bool, int, float, double, string, name, text, byte, vector, rotator, transform, linear_color, object, class, softobject, softclass, interface, struct, enum."),
+            *VarType));
+    }
+
+    // Add the variable by directly constructing FBPVariableDescription in NewVariables
+    FBPVariableDescription NewVar;
+    NewVar.VarName = FName(*VarName);
+    NewVar.VarType = PinType;
+    NewVar.FriendlyName = VarName;
+    NewVar.DefaultValue = DefaultValue;
+    // Default to Edit (instance editable) + BlueprintVisible
+    NewVar.PropertyFlags = CPF_Edit | CPF_BlueprintVisible | CPF_DisableEditOnInstance;
+    Blueprint->NewVariables.Add(NewVar);
+
+    FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+
+    TSharedPtr<FJsonObject> R = MakeShareable(new FJsonObject());
+    R->SetBoolField(TEXT("success"), true);
+    R->SetStringField(TEXT("var_name"), VarName);
+    R->SetStringField(TEXT("message"), FString::Printf(TEXT("Variable '%s' of type '%s' added."), *VarName, *VarType));
+    return SerializeJsonObj(R);
+}
+
+// ─── RemoveBlueprintVariable ──────────────────────────────────────────
+
+FString UMCPythonHelper::RemoveBlueprintVariable(UBlueprint* Blueprint, const FString& VarName)
+{
+    if (!Blueprint)
+        return MakeJsonError(TEXT("Invalid Blueprint."));
+
+    FName VarFName(VarName);
+    bool bFound = false;
+    for (const FBPVariableDescription& Var : Blueprint->NewVariables)
+    {
+        if (Var.VarName == VarFName)
+        {
+            bFound = true;
+            break;
+        }
+    }
+
+    if (!bFound)
+        return MakeJsonError(FString::Printf(TEXT("Variable '%s' not found."), *VarName));
+
+    // Remove directly from NewVariables array
+    Blueprint->NewVariables.RemoveAll([&](const FBPVariableDescription& V) { return V.VarName == VarFName; });
+    FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+
+    return MakeJsonSuccess(FString::Printf(TEXT("Variable '%s' removed."), *VarName));
+}
+
+// ─── SetBlueprintVariableProperty ─────────────────────────────────────
+
+FString UMCPythonHelper::SetBlueprintVariableProperty(UBlueprint* Blueprint,
+    const FString& VarName, const FString& Property, const FString& Value)
+{
+    if (!Blueprint)
+        return MakeJsonError(TEXT("Invalid Blueprint."));
+
+    FName VarFName(VarName);
+    FBPVariableDescription* FoundVar = nullptr;
+    for (FBPVariableDescription& Var : Blueprint->NewVariables)
+    {
+        if (Var.VarName == VarFName)
+        {
+            FoundVar = &Var;
+            break;
+        }
+    }
+
+    if (!FoundVar)
+        return MakeJsonError(FString::Printf(TEXT("Variable '%s' not found."), *VarName));
+
+    bool bValueBool = (Value.Equals(TEXT("true"), ESearchCase::IgnoreCase) || Value == TEXT("1"));
+    bool bHandled = true;
+
+    if (Property.Equals(TEXT("category"), ESearchCase::IgnoreCase))
+    {
+        FoundVar->Category = FText::FromString(Value);
+    }
+    else if (Property.Equals(TEXT("tooltip"), ESearchCase::IgnoreCase))
+    {
+        FoundVar->SetMetaData(TEXT("tooltip"), Value);
+    }
+    else if (Property.Equals(TEXT("default_value"), ESearchCase::IgnoreCase))
+    {
+        FoundVar->DefaultValue = Value;
+    }
+    else if (Property.Equals(TEXT("expose_on_spawn"), ESearchCase::IgnoreCase))
+    {
+        if (bValueBool)
+            FoundVar->PropertyFlags |= CPF_ExposeOnSpawn;
+        else
+            FoundVar->PropertyFlags &= ~CPF_ExposeOnSpawn;
+    }
+    else if (Property.Equals(TEXT("instance_editable"), ESearchCase::IgnoreCase))
+    {
+        if (bValueBool)
+            FoundVar->PropertyFlags |= CPF_Edit;
+        else
+            FoundVar->PropertyFlags &= ~CPF_Edit;
+    }
+    else if (Property.Equals(TEXT("blueprint_read_only"), ESearchCase::IgnoreCase))
+    {
+        if (bValueBool)
+            FoundVar->PropertyFlags |= CPF_BlueprintReadOnly;
+        else
+            FoundVar->PropertyFlags &= ~CPF_BlueprintReadOnly;
+    }
+    else if (Property.Equals(TEXT("blueprint_read_only_owner"), ESearchCase::IgnoreCase))
+    {
+        if (bValueBool)
+            FoundVar->PropertyFlags |= CPF_BlueprintReadOnly | CPF_DisableEditOnInstance | CPF_DisableEditOnTemplate;
+        else
+            FoundVar->PropertyFlags &= ~(CPF_BlueprintReadOnly | CPF_DisableEditOnInstance | CPF_DisableEditOnTemplate);
+    }
+    else if (Property.Equals(TEXT("private"), ESearchCase::IgnoreCase))
+    {
+        if (bValueBool)
+            FoundVar->PropertyFlags |= CPF_NativeAccessSpecifierPrivate;
+        else
+            FoundVar->PropertyFlags &= ~CPF_NativeAccessSpecifierPrivate;
+    }
+    else if (Property.Equals(TEXT("exposetoowner"), ESearchCase::IgnoreCase))
+    {
+        FoundVar->SetMetaData(TEXT("ExposeToOwner"), bValueBool ? TEXT("true") : TEXT("false"));
+    }
+    else if (Property.Equals(TEXT("bitmask"), ESearchCase::IgnoreCase))
+    {
+        FoundVar->SetMetaData(TEXT("Bitmask"), bValueBool ? TEXT("true") : TEXT("false"));
+    }
+    else
+    {
+        bHandled = false;
+    }
+
+    if (!bHandled)
+    {
+        return MakeJsonError(FString::Printf(
+            TEXT("Unsupported property '%s'. Supported: category, tooltip, default_value, expose_on_spawn, instance_editable, blueprint_read_only, blueprint_read_only_owner, private, exposetoowner, bitmask."),
+            *Property));
+    }
+
+    FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+
+    TSharedPtr<FJsonObject> R = MakeShareable(new FJsonObject());
+    R->SetBoolField(TEXT("success"), true);
+    R->SetStringField(TEXT("message"), FString::Printf(TEXT("Variable '%s' property '%s' set to '%s'."), *VarName, *Property, *Value));
+    return SerializeJsonObj(R);
+}
+
+// ─── ListFunctionGraphs ────────────────────────────────────────────────
+
+FString UMCPythonHelper::ListFunctionGraphs(UBlueprint* Blueprint)
+{
+    if (!Blueprint)
+        return MakeJsonError(TEXT("Invalid Blueprint."));
+
+    TArray<TSharedPtr<FJsonValue>> FuncsArr;
+    for (UEdGraph* Graph : Blueprint->FunctionGraphs)
+    {
+        if (!Graph) continue;
+        TSharedPtr<FJsonObject> FuncObj = MakeShareable(new FJsonObject());
+        FuncObj->SetStringField(TEXT("name"), Graph->GetName());
+        // Find the entry node
+        FString EntryNodeName;
+        for (UEdGraphNode* Node : Graph->Nodes)
+        {
+            if (Node && Node->IsA<UK2Node_FunctionEntry>())
+            {
+                EntryNodeName = Node->GetName();
+                break;
+            }
+        }
+        if (!EntryNodeName.IsEmpty())
+            FuncObj->SetStringField(TEXT("entry_node"), EntryNodeName);
+        FuncObj->SetNumberField(TEXT("node_count"), Graph->Nodes.Num());
+        FuncsArr.Add(MakeShareable(new FJsonValueObject(FuncObj)));
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShareable(new FJsonObject());
+    Result->SetBoolField(TEXT("success"), true);
+    Result->SetNumberField(TEXT("count"), FuncsArr.Num());
+    Result->SetArrayField(TEXT("functions"), FuncsArr);
+    return SerializeJsonObj(Result);
+}
+
+// ─── AddFunctionGraph ───────────────────────────────────────────────────
+
+FString UMCPythonHelper::AddFunctionGraph(UBlueprint* Blueprint, const FString& FuncName)
+{
+    if (!Blueprint)
+        return MakeJsonError(TEXT("Invalid Blueprint."));
+
+    if (FuncName.IsEmpty())
+        return MakeJsonError(TEXT("FuncName cannot be empty."));
+
+    // Check for name collision across all graphs
+    for (UEdGraph* Graph : Blueprint->FunctionGraphs)
+    {
+        if (Graph && Graph->GetName().Equals(FuncName, ESearchCase::IgnoreCase))
+        {
+            return MakeJsonError(FString::Printf(TEXT("Function '%s' already exists."), *FuncName));
+        }
+    }
+
+    // Create the graph
+    UEdGraph* NewGraph = FBlueprintEditorUtils::CreateNewGraph(
+        Blueprint, FName(*FuncName), UEdGraph::StaticClass(), UEdGraphSchema_K2::StaticClass());
+    if (!NewGraph)
+        return MakeJsonError(FString::Printf(TEXT("Failed to create function graph '%s'."), *FuncName));
+
+    // Add it to the FunctionGraphs array
+    Blueprint->FunctionGraphs.Add(NewGraph);
+
+    FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+
+    TSharedPtr<FJsonObject> R = MakeShareable(new FJsonObject());
+    R->SetBoolField(TEXT("success"), true);
+    R->SetStringField(TEXT("graph_name"), NewGraph->GetName());
+    R->SetStringField(TEXT("message"), FString::Printf(TEXT("Function graph '%s' created."), *NewGraph->GetName()));
+    return SerializeJsonObj(R);
+}
+
+// ─── RemoveFunctionGraph ────────────────────────────────────────────────
+
+FString UMCPythonHelper::RemoveFunctionGraph(UBlueprint* Blueprint, const FString& FuncName)
+{
+    if (!Blueprint)
+        return MakeJsonError(TEXT("Invalid Blueprint."));
+
+    if (FuncName.IsEmpty())
+        return MakeJsonError(TEXT("FuncName cannot be empty."));
+
+    UEdGraph* FoundGraph = nullptr;
+    for (UEdGraph* Graph : Blueprint->FunctionGraphs)
+    {
+        if (Graph && Graph->GetName().Equals(FuncName, ESearchCase::IgnoreCase))
+        {
+            FoundGraph = Graph;
+            break;
+        }
+    }
+
+    if (!FoundGraph)
+        return MakeJsonError(FString::Printf(TEXT("Function '%s' not found."), *FuncName));
+
+    FBlueprintEditorUtils::RemoveGraph(Blueprint, FoundGraph, EGraphRemoveFlags::Recompile);
+    FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+
+    return MakeJsonSuccess(FString::Printf(TEXT("Function '%s' removed."), *FuncName));
 }
 
 // ─── Blueprint Node Creation Helpers ─────────────────────────────────────────
@@ -1473,6 +1961,17 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
     }
     else if (NodeType == TEXT("SpawnActor"))
     {
+        // Safety: UK2Node_SpawnActorFromClass requires event graph context.
+        // Function graphs will crash at CreateNode() with assertion failure.
+        for (UEdGraphNode* N : Graph->Nodes)
+        {
+            if (N && N->IsA<UK2Node_FunctionEntry>())
+            {
+                OutError = TEXT("SpawnActor node type is incompatible with function graphs. Use CallFunction with 'BeginDeferredActorSpawnFromClass' (target: GameplayStatics) instead.");
+                return nullptr;
+            }
+        }
+
         FGraphNodeCreator<UK2Node_SpawnActorFromClass> Creator(*Graph);
         UK2Node_SpawnActorFromClass* SpawnNode = Creator.CreateNode(false);
         SpawnNode->NodePosX = PosX;
@@ -1480,9 +1979,62 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
         Creator.Finalize();
         NewNode = SpawnNode;
     }
+    else if (NodeType == TEXT("AsyncAction"))
+    {
+        FString FactoryClassPath, ProxyClassPath, FactoryFunctionName;
+        if (!NodeJson->TryGetStringField(TEXT("factory_class"), FactoryClassPath) || FactoryClassPath.IsEmpty())
+        {
+            OutError = TEXT("AsyncAction node missing 'factory_class'.");
+            return nullptr;
+        }
+        if (!NodeJson->TryGetStringField(TEXT("proxy_class"), ProxyClassPath) || ProxyClassPath.IsEmpty())
+        {
+            OutError = TEXT("AsyncAction node missing 'proxy_class'.");
+            return nullptr;
+        }
+        if (!NodeJson->TryGetStringField(TEXT("factory_function"), FactoryFunctionName) || FactoryFunctionName.IsEmpty())
+        {
+            OutError = TEXT("AsyncAction node missing 'factory_function'.");
+            return nullptr;
+        }
+
+        UClass* FactoryClass = LoadClass<UObject>(nullptr, *FactoryClassPath);
+        if (!FactoryClass)
+            FactoryClass = FindFirstObject<UClass>(*FactoryClassPath, EFindFirstObjectOptions::NativeFirst);
+        UClass* ProxyClass = LoadClass<UObject>(nullptr, *ProxyClassPath);
+        if (!ProxyClass)
+            ProxyClass = FindFirstObject<UClass>(*ProxyClassPath, EFindFirstObjectOptions::NativeFirst);
+        if (!FactoryClass)
+        {
+            OutError = FString::Printf(TEXT("AsyncAction factory class '%s' not found."), *FactoryClassPath);
+            return nullptr;
+        }
+        if (!ProxyClass)
+        {
+            OutError = FString::Printf(TEXT("AsyncAction proxy class '%s' not found."), *ProxyClassPath);
+            return nullptr;
+        }
+        if (!FactoryClass->FindFunctionByName(FName(*FactoryFunctionName)))
+        {
+            OutError = FString::Printf(TEXT("AsyncAction factory function '%s' not found on '%s'."),
+                *FactoryFunctionName, *FactoryClass->GetName());
+            return nullptr;
+        }
+
+        FGraphNodeCreator<UK2Node_AsyncAction> Creator(*Graph);
+        UK2Node_AsyncAction* AsyncNode = Creator.CreateNode(false);
+        if (!SetAsyncActionProxyProperties(AsyncNode, FactoryClass, ProxyClass, FName(*FactoryFunctionName), OutError))
+        {
+            return nullptr;
+        }
+        AsyncNode->NodePosX = PosX;
+        AsyncNode->NodePosY = PosY;
+        Creator.Finalize();
+        NewNode = AsyncNode;
+    }
     else
     {
-        OutError = FString::Printf(TEXT("Unknown node type '%s'. Supported: CallFunction, Event, CustomEvent, CastTo, Branch, Sequence, VariableGet, VariableSet, MacroInstance, InputKey, SpawnActor."), *NodeType);
+        OutError = FString::Printf(TEXT("Unknown node type '%s'. Supported: CallFunction, Event, CustomEvent, CastTo, Branch, Sequence, VariableGet, VariableSet, MacroInstance, InputKey, SpawnActor, AsyncAction."), *NodeType);
         return nullptr;
     }
 
@@ -1495,10 +2047,9 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
             UEdGraphPin* Pin = FindPinByName(NewNode, Pair.Key, EGPD_Input);
             if (Pin)
             {
-                FString Value;
-                if (Pair.Value->TryGetString(Value))
+                if (!ApplyPinDefault(NewNode, Pin, Pair.Value, OutError))
                 {
-                    Pin->DefaultValue = Value;
+                    return nullptr;
                 }
             }
         }

@@ -329,7 +329,9 @@ def ue_set_blueprint_node_position(asset_path: str = None, graph_name: str = "Ev
 
 def ue_auto_layout_graph(asset_path: str = None, graph_name: str = "EventGraph",
                           x_step: float = 380.0, y_step: float = 200.0) -> str:
-    """Auto-lays out all nodes in a Blueprint graph using DAG topological sort."""
+    """Auto-lays out all nodes in a Blueprint graph using unified exec+data DAG
+    topological sort. Pure/data nodes (math, conversions, VariableGet) are placed
+    at correct column depth based on data-flow distance from the exec spine."""
     if asset_path is None:
         return json.dumps({"success": False, "message": "Required parameter 'asset_path' is missing."})
     try:
@@ -349,19 +351,31 @@ def ue_auto_layout_graph(asset_path: str = None, graph_name: str = "EventGraph",
         node_names = [n["node_name"] for n in nodes]
         name_set = set(node_names)
 
+        # Classify nodes: EXEC (has exec pins) vs PURE (data-only)
+        ENTRY_CLASSES = {"K2Node_Event", "K2Node_CustomEvent", "K2Node_InputKey",
+                         "K2Node_InputAction", "K2Node_FunctionEntry"}
+
+        is_exec = {}
+        is_entry = {}
+        for node in nodes:
+            n = node["node_name"]
+            has_exec = False
+            for pin in node.get("pins", []):
+                if pin.get("type") == "exec":
+                    has_exec = True
+                    break
+            is_exec[n] = has_exec
+            node_class = node.get("node_class", "")
+            is_entry[n] = any(et in node_class for et in ENTRY_CLASSES)
+
+        # Phase 2: Build unified dependency graph from ALL output pins
         in_degree = {n: 0 for n in node_names}
         successors = {n: [] for n in node_names}
-
-        ENTRY_TYPES = {"K2Node_Event", "K2Node_CustomEvent", "K2Node_InputKey",
-                       "K2Node_InputAction", "K2Node_FunctionEntry"}
 
         for node in nodes:
             node_name = node["node_name"]
             for pin in node.get("pins", []):
                 if pin.get("direction") != "Output":
-                    continue
-                pin_type = pin.get("type", "")
-                if pin_type not in ("exec", ""):
                     continue
                 for link in pin.get("linked_to", []):
                     target = link.get("node_name", "")
@@ -370,50 +384,96 @@ def ue_auto_layout_graph(asset_path: str = None, graph_name: str = "EventGraph",
                             successors[node_name].append(target)
                             in_degree[target] += 1
 
-        forced_entry = set()
-        for node in nodes:
-            node_class = node.get("node_class", node.get("node_name", ""))
-            for et in ENTRY_TYPES:
-                if et in node_class or et in node.get("node_name", ""):
-                    forced_entry.add(node["node_name"])
-                    break
-        for node in nodes:
-            n = node["node_name"]
-            if in_degree[n] == 0:
-                for pin in node.get("pins", []):
-                    if pin.get("direction") == "Output" and pin.get("type") in ("exec", ""):
-                        forced_entry.add(n)
-                        break
-
+        # Phase 3: Topological sort — column assignment
         column = {}
         queue = deque()
+        queued_or_processed = set()
+
+        # Entry nodes are always column 0
         for n in node_names:
-            if in_degree[n] == 0 or n in forced_entry:
+            if is_entry[n]:
                 column[n] = 0
                 queue.append(n)
+                queued_or_processed.add(n)
+
+        # Also seed with nodes that have no incoming connections
+        for n in node_names:
+            if in_degree[n] == 0 and n not in queued_or_processed:
+                column[n] = 0
+                queue.append(n)
+                queued_or_processed.add(n)
 
         while queue:
             n = queue.popleft()
             for s in successors[n]:
-                if column.get(s, -1) < column[n] + 1:
-                    column[s] = column[n] + 1
+                new_col = column[n] + 1
+                if column.get(s, -1) < new_col:
+                    column[s] = new_col
                 in_degree[s] -= 1
-                if in_degree[s] <= 0 and s not in column:
+                if in_degree[s] <= 0 and s not in queued_or_processed:
                     queue.append(s)
+                    queued_or_processed.add(s)
 
+        # Any nodes still unplaced (disconnected) go in column 0
         for n in node_names:
             if n not in column:
                 column[n] = 0
 
-        col_row = {}
-        positions = {}
-        for node in nodes:
-            n = node["node_name"]
-            c = column[n]
-            r = col_row.get(c, 0)
-            positions[n] = (c * x_step, r * y_step)
-            col_row[c] = r + 1
+        # Phase 4: Compute "exec affinity" for subgraph grouping
+        # For each node, find which exec spine node its data ultimately flows into.
+        # We trace forward through data connections until hitting an exec node.
+        def find_affinity(start_name, max_depth=20):
+            """Find the nearest downstream exec node by following output links."""
+            visited = set()
+            q = deque([(start_name, 0)])
+            while q:
+                name, depth = q.popleft()
+                if depth > max_depth:
+                    break
+                if is_exec.get(name) and name != start_name:
+                    return name
+                for s in successors.get(name, []):
+                    if s not in visited:
+                        visited.add(s)
+                        q.append((s, depth + 1))
+            return None
 
+        node_affinity = {}
+        for n in node_names:
+            aff = find_affinity(n)
+            node_affinity[n] = aff or ""
+
+        # Phase 5: Row assignment within each column, grouped by affinity
+        # Collect nodes per column
+        col_nodes = {}
+        for n in node_names:
+            c = column[n]
+            col_nodes.setdefault(c, []).append(n)
+
+        positions = {}
+        for c in sorted(col_nodes.keys()):
+            col_list = col_nodes[c]
+            # Sort: entry nodes first, then by affinity, then by name
+            col_list.sort(key=lambda n: (
+                not is_entry.get(n, False),      # entries first
+                node_affinity.get(n, ""),         # group by affinity
+                n                                  # then by name
+            ))
+
+            row = 0
+            prev_affinity = None
+            group_gap = y_step * 0.5  # extra gap between different affinity groups
+
+            for n in col_list:
+                aff = node_affinity.get(n, "")
+                if prev_affinity is not None and aff != prev_affinity and prev_affinity != "" and aff != "":
+                    row += 1  # add extra row gap between different subgraphs
+                prev_affinity = aff
+
+                positions[n] = (c * x_step, row * y_step)
+                row += 1
+
+        # Phase 6: Apply positions
         errors = []
         positioned = 0
         for n, (px, py) in positions.items():
@@ -428,8 +488,167 @@ def ue_auto_layout_graph(asset_path: str = None, graph_name: str = "EventGraph",
             "success": True,
             "positioned": positioned,
             "total": len(node_names),
+            "columns": len(col_nodes),
+            "max_column": max(column.values()) if column else 0,
             "errors": errors,
-            "message": f"Auto-layout complete: {positioned}/{len(node_names)} nodes positioned.",
+            "message": f"Auto-layout complete: {positioned}/{len(node_names)} nodes in {len(col_nodes)} columns.",
         })
+    except Exception as e:
+        return json.dumps({"success": False, "message": str(e), "traceback": traceback.format_exc()})
+
+
+# ─── Variable Lifecycle ────────────────────────────────────────────────────────
+
+def ue_add_blueprint_variable(asset_path: str = None, var_name: str = None,
+                               var_type: str = "bool",
+                               var_sub_type: str = "",
+                               is_array: bool = False,
+                               default_value: str = "") -> str:
+    """Adds a new variable to a Blueprint. Returns JSON."""
+    if asset_path is None:
+        return json.dumps({"success": False, "message": "Required parameter 'asset_path' is missing."})
+    if var_name is None:
+        return json.dumps({"success": False, "message": "Required parameter 'var_name' is missing."})
+    try:
+        bp, err = _load_asset(asset_path, unreal.Blueprint)
+        if err:
+            return err
+        result_json = unreal.MCPythonHelper.add_blueprint_variable(
+            bp, var_name, var_type, var_sub_type, is_array, default_value)
+        return result_json
+    except Exception as e:
+        return json.dumps({"success": False, "message": str(e), "traceback": traceback.format_exc()})
+
+
+def ue_remove_blueprint_variable(asset_path: str = None, var_name: str = None) -> str:
+    """Removes a variable from a Blueprint by name. Returns JSON."""
+    if asset_path is None:
+        return json.dumps({"success": False, "message": "Required parameter 'asset_path' is missing."})
+    if var_name is None:
+        return json.dumps({"success": False, "message": "Required parameter 'var_name' is missing."})
+    try:
+        bp, err = _load_asset(asset_path, unreal.Blueprint)
+        if err:
+            return err
+        result_json = unreal.MCPythonHelper.remove_blueprint_variable(bp, var_name)
+        return result_json
+    except Exception as e:
+        return json.dumps({"success": False, "message": str(e), "traceback": traceback.format_exc()})
+
+
+def ue_set_blueprint_variable_property(asset_path: str = None, var_name: str = None,
+                                        property: str = None, value: str = None) -> str:
+    """Sets a property on a Blueprint variable. Returns JSON."""
+    if asset_path is None:
+        return json.dumps({"success": False, "message": "Required parameter 'asset_path' is missing."})
+    if var_name is None:
+        return json.dumps({"success": False, "message": "Required parameter 'var_name' is missing."})
+    if property is None:
+        return json.dumps({"success": False, "message": "Required parameter 'property' is missing."})
+    if value is None:
+        return json.dumps({"success": False, "message": "Required parameter 'value' is missing."})
+    try:
+        bp, err = _load_asset(asset_path, unreal.Blueprint)
+        if err:
+            return err
+        result_json = unreal.MCPythonHelper.set_blueprint_variable_property(bp, var_name, property, value)
+        return result_json
+    except Exception as e:
+        return json.dumps({"success": False, "message": str(e), "traceback": traceback.format_exc()})
+
+
+# ─── Expose Existing C++ Functions ──────────────────────────────────────────────
+
+def ue_set_blueprint_cdo_property(asset_path: str = None, property_name: str = None,
+                                   value: str = None) -> str:
+    """Sets a CDO property on a Blueprint, including inherited C++ UPROPERTYs.
+    Uses TFieldIterator with IncludeSuper to bypass Python set_editor_property limitations.
+    Returns JSON."""
+    if asset_path is None:
+        return json.dumps({"success": False, "message": "Required parameter 'asset_path' is missing."})
+    if property_name is None:
+        return json.dumps({"success": False, "message": "Required parameter 'property_name' is missing."})
+    if value is None:
+        return json.dumps({"success": False, "message": "Required parameter 'value' is missing."})
+    try:
+        bp, err = _load_asset(asset_path, unreal.Blueprint)
+        if err:
+            return err
+        result_json = unreal.MCPythonHelper.set_blueprint_cdo_property(bp, property_name, value)
+        return result_json
+    except Exception as e:
+        return json.dumps({"success": False, "message": str(e), "traceback": traceback.format_exc()})
+
+
+def ue_set_blueprint_node_pin_default(asset_path: str = None, graph_name: str = "EventGraph",
+                                       node_name: str = None, pin_name: str = None,
+                                       value: str = None) -> str:
+    """Sets the default value of a pin on a Blueprint graph node.
+    For object-type pins, Value should be an asset path.
+    For numeric/bool pins, Value is the literal string.
+    Returns JSON."""
+    if asset_path is None:
+        return json.dumps({"success": False, "message": "Required parameter 'asset_path' is missing."})
+    if node_name is None:
+        return json.dumps({"success": False, "message": "Required parameter 'node_name' is missing."})
+    if pin_name is None:
+        return json.dumps({"success": False, "message": "Required parameter 'pin_name' is missing."})
+    if value is None:
+        return json.dumps({"success": False, "message": "Required parameter 'value' is missing."})
+    try:
+        bp, err = _load_asset(asset_path, unreal.Blueprint)
+        if err:
+            return err
+        result_json = unreal.MCPythonHelper.set_blueprint_node_pin_default(
+            bp, graph_name, node_name, pin_name, value)
+        return result_json
+    except Exception as e:
+        return json.dumps({"success": False, "message": str(e), "traceback": traceback.format_exc()})
+
+
+# ─── Function Graph Management ──────────────────────────────────────────────────
+
+def ue_list_function_graphs(asset_path: str = None) -> str:
+    """Lists all function graphs in a Blueprint. Returns JSON."""
+    if asset_path is None:
+        return json.dumps({"success": False, "message": "Required parameter 'asset_path' is missing."})
+    try:
+        bp, err = _load_asset(asset_path, unreal.Blueprint)
+        if err:
+            return err
+        result_json = unreal.MCPythonHelper.list_function_graphs(bp)
+        return result_json
+    except Exception as e:
+        return json.dumps({"success": False, "message": str(e), "traceback": traceback.format_exc()})
+
+
+def ue_add_function_graph(asset_path: str = None, func_name: str = None) -> str:
+    """Creates a new function graph in a Blueprint. Returns JSON."""
+    if asset_path is None:
+        return json.dumps({"success": False, "message": "Required parameter 'asset_path' is missing."})
+    if func_name is None:
+        return json.dumps({"success": False, "message": "Required parameter 'func_name' is missing."})
+    try:
+        bp, err = _load_asset(asset_path, unreal.Blueprint)
+        if err:
+            return err
+        result_json = unreal.MCPythonHelper.add_function_graph(bp, func_name)
+        return result_json
+    except Exception as e:
+        return json.dumps({"success": False, "message": str(e), "traceback": traceback.format_exc()})
+
+
+def ue_remove_function_graph(asset_path: str = None, func_name: str = None) -> str:
+    """Removes a function graph from a Blueprint by name. Returns JSON."""
+    if asset_path is None:
+        return json.dumps({"success": False, "message": "Required parameter 'asset_path' is missing."})
+    if func_name is None:
+        return json.dumps({"success": False, "message": "Required parameter 'func_name' is missing."})
+    try:
+        bp, err = _load_asset(asset_path, unreal.Blueprint)
+        if err:
+            return err
+        result_json = unreal.MCPythonHelper.remove_function_graph(bp, func_name)
+        return result_json
     except Exception as e:
         return json.dumps({"success": False, "message": str(e), "traceback": traceback.format_exc()})
