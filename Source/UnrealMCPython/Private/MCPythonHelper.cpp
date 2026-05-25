@@ -40,6 +40,7 @@
 #include "K2Node_CustomEvent.h"
 #include "K2Node_CallFunction.h"
 #include "K2Node_FunctionEntry.h"
+#include "K2Node_FunctionResult.h"
 #include "K2Node_IfThenElse.h"
 #include "K2Node_ExecutionSequence.h"
 #include "K2Node_VariableGet.h"
@@ -47,6 +48,7 @@
 #include "K2Node_MacroInstance.h"
 #include "K2Node_DynamicCast.h"
 #include "K2Node_InputKey.h"
+#include "K2Node_PromotableOperator.h"
 #include "K2Node_SpawnActorFromClass.h"
 #include "K2Node_AsyncAction.h"
 #include "EdGraphSchema_K2.h"
@@ -1055,9 +1057,15 @@ static bool ParseVariableType(const FString& VarTypeStr,
     {
         Category = UEdGraphSchema_K2::PC_Int64;
     }
-    else if (CategoryEquals(TEXT("float")) || CategoryEquals(TEXT("real")) || CategoryEquals(TEXT("double")))
+    else if (CategoryEquals(TEXT("float")) || CategoryEquals(TEXT("real")))
     {
         Category = UEdGraphSchema_K2::PC_Real;
+        OutPinType.PinSubCategory = UEdGraphSchema_K2::PC_Float;
+    }
+    else if (CategoryEquals(TEXT("double")))
+    {
+        Category = UEdGraphSchema_K2::PC_Real;
+        OutPinType.PinSubCategory = UEdGraphSchema_K2::PC_Double;
     }
     else if (CategoryEquals(TEXT("byte")))
     {
@@ -1817,6 +1825,15 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
         Creator.Finalize();
         NewNode = SeqNode;
     }
+    else if (NodeType == TEXT("PromotableOperator"))
+    {
+        FGraphNodeCreator<UK2Node_PromotableOperator> Creator(*Graph);
+        UK2Node_PromotableOperator* OpNode = Creator.CreateNode(false);
+        OpNode->NodePosX = PosX;
+        OpNode->NodePosY = PosY;
+        Creator.Finalize();
+        NewNode = OpNode;
+    }
     else if (NodeType == TEXT("VariableGet"))
     {
         FString VarName;
@@ -2298,7 +2315,9 @@ FString UMCPythonHelper::BuildBlueprintGraph(UBlueprint* Blueprint, const FStrin
         if (!Node) continue;
         // Keep entry points (function entry, etc.) but remove user nodes
         // For EventGraph, we typically remove all non-essential nodes
-        if (!Node->IsA<UK2Node_Event>())
+        if (!Node->IsA<UK2Node_Event>() &&
+            !Node->IsA<UK2Node_FunctionEntry>() &&
+            !Node->IsA<UK2Node_FunctionResult>())
         {
             NodesToRemove.Add(Node);
         }
