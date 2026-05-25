@@ -1627,21 +1627,8 @@ FString UMCPythonHelper::AddFunctionGraph(UBlueprint* Blueprint, const FString& 
     if (!NewGraph)
         return MakeJsonError(FString::Printf(TEXT("Failed to create function graph '%s'."), *FuncName));
 
-    // Add it to the FunctionGraphs array
-    Blueprint->FunctionGraphs.Add(NewGraph);
-
-    // Create FunctionEntry and FunctionResult nodes in the graph
-    FGraphNodeCreator<UK2Node_FunctionEntry> EntryCreator(*NewGraph);
-    UK2Node_FunctionEntry* EntryNode = EntryCreator.CreateNode(false);
-    EntryNode->NodePosX = 0;
-    EntryNode->NodePosY = 0;
-    EntryCreator.Finalize();
-
-    FGraphNodeCreator<UK2Node_FunctionResult> ResultCreator(*NewGraph);
-    UK2Node_FunctionResult* ResultNode = ResultCreator.CreateNode(false);
-    ResultNode->NodePosX = 600;
-    ResultNode->NodePosY = 0;
-    ResultCreator.Finalize();
+    // Properly register as a function graph with entry/result nodes
+    FBlueprintEditorUtils::AddFunctionGraph(Blueprint, NewGraph, /*bIsUserCreated=*/true, nullptr);
 
     FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
 
