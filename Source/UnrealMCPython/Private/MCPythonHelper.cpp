@@ -2175,18 +2175,14 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
         UK2Node_FunctionResult* ResultNode = Creator.CreateNode(false);
         ResultNode->NodePosX = PosX;
         ResultNode->NodePosY = PosY;
-        Creator.Finalize();
 
-        // Add return value pins after Finalize, then reconstruct to apply
+        // Add return value pins BEFORE Finalize so AllocateDefaultPins can create them
         for (const auto& Spec : ReturnPinSpecs)
         {
             ResultNode->CreateUserDefinedPin(Spec.Key, Spec.Value, EGPD_Input, false);
         }
-        if (ReturnPinSpecs.Num() > 0)
-        {
-            ResultNode->ReconstructNode();
-        }
 
+        Creator.Finalize();
         NewNode = ResultNode;
     }
     else
