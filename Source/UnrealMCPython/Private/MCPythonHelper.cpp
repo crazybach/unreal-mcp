@@ -1904,13 +1904,6 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
         UK2Node_PromotableOperator* OpNode = Creator.CreateNode(false);
         OpNode->NodePosX = PosX;
         OpNode->NodePosY = PosY;
-
-        FString OperationName;
-        if (NodeJson->TryGetStringField(TEXT("operation_name"), OperationName) && !OperationName.IsEmpty())
-        {
-            OpNode->OperationName = FName(*OperationName);
-        }
-
         Creator.Finalize();
         NewNode = OpNode;
     }
