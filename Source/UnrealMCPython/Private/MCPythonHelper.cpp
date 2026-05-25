@@ -1627,8 +1627,8 @@ FString UMCPythonHelper::AddFunctionGraph(UBlueprint* Blueprint, const FString& 
     if (!NewGraph)
         return MakeJsonError(FString::Printf(TEXT("Failed to create function graph '%s'."), *FuncName));
 
-    // Properly register as a function graph with entry/result nodes
-    FBlueprintEditorUtils::AddFunctionGraph(Blueprint, NewGraph, /*bIsUserCreated=*/true, nullptr);
+    // Properly register as a function graph (creates FunctionEntry and handles override signatures)
+    FBlueprintEditorUtils::AddFunctionGraph(Blueprint, NewGraph, /*bIsUserCreated=*/true, static_cast<UClass*>(nullptr));
 
     FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
 
