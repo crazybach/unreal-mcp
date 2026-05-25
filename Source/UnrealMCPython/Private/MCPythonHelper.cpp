@@ -2164,7 +2164,7 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
 
                     if (!PinName.IsEmpty() && !PinType.IsEmpty())
                     {
-                        bool bIsArray = true; // DEBUG HARDCODE
+                        bool bIsArray = false;
                         (*Obj)->TryGetBoolField(TEXT("is_array"), bIsArray);
                         FString VarSubType;
                         (*Obj)->TryGetStringField(TEXT("sub_type"), VarSubType);
@@ -2178,16 +2178,34 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
             }
         }
 
+        // Add output pins to FunctionEntry first -- this defines the function signature
+        // The FunctionResult will auto-generate matching input pins
+        for (UEdGraphNode* Node : Graph->Nodes)
+        {
+            if (Node && Node->IsA<UK2Node_FunctionEntry>())
+            {
+                for (const auto& Spec : ReturnPinSpecs)
+                {
+                    Node->CreateUserDefinedPin(Spec.Key, Spec.Value, EGPD_Output, false);
+                }
+                Node->ReconstructNode();
+                break;
+            }
+        }
+
         FGraphNodeCreator<UK2Node_FunctionResult> Creator(*Graph);
         UK2Node_FunctionResult* ResultNode = Creator.CreateNode(false);
         ResultNode->NodePosX = PosX;
         ResultNode->NodePosY = PosY;
         Creator.Finalize();
 
-        // Use CreatePin directly (bypasses CanCreateUserDefinedPin which returns false for FunctionResult)
+        // Also create pins directly on the ResultNode as a fallback
         for (const auto& Spec : ReturnPinSpecs)
         {
-            ResultNode->CreatePin(EGPD_Input, Spec.Value, Spec.Key);
+            if (!ResultNode->FindPin(Spec.Key))
+            {
+                ResultNode->CreatePin(EGPD_Input, Spec.Value, Spec.Key);
+            }
         }
 
         NewNode = ResultNode;
