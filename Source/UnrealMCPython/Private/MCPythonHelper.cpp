@@ -1200,6 +1200,11 @@ static bool ParseVariableType(const FString& VarTypeStr,
     OutPinType.PinCategory = Category;
     OutPinType.PinSubCategoryObject = SubObj;
     OutPinType.ContainerType = bIsArray ? EPinContainerType::Array : EPinContainerType::None;
+    if (bIsArray)
+    {
+        OutPinType.PinValueType.TerminalCategory = Category;
+        OutPinType.PinValueType.TerminalSubCategoryObject = SubObj;
+    }
     return true;
 }
 
@@ -2159,7 +2164,7 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
 
                     if (!PinName.IsEmpty() && !PinType.IsEmpty())
                     {
-                        bool bIsArray = false;
+                        bool bIsArray = true; // DEBUG HARDCODE
                         (*Obj)->TryGetBoolField(TEXT("is_array"), bIsArray);
                         FString VarSubType;
                         (*Obj)->TryGetStringField(TEXT("sub_type"), VarSubType);
