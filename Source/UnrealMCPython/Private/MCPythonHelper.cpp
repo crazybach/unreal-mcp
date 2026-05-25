@@ -2184,6 +2184,12 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
         {
             if (UK2Node_FunctionEntry* EntryNode = Cast<UK2Node_FunctionEntry>(Node))
             {
+                // Remove existing return value pins before adding new ones
+                for (const auto& Spec : ReturnPinSpecs)
+                {
+                    EntryNode->RemoveUserDefinedPinByName(Spec.Key);
+                }
+                // Add new return value pins
                 for (const auto& Spec : ReturnPinSpecs)
                 {
                     EntryNode->CreateUserDefinedPin(Spec.Key, Spec.Value, EGPD_Output, false);
@@ -2457,7 +2463,6 @@ FString UMCPythonHelper::BuildBlueprintGraph(UBlueprint* Blueprint, const FStrin
         // For EventGraph, we typically remove all non-essential nodes
         if (!Node->IsA<UK2Node_Event>() &&
             !Node->IsA<UK2Node_FunctionEntry>() &&
-            !Node->IsA<UK2Node_FunctionResult>() &&
             !Node->IsA<UK2Node_CallParentFunction>())
         {
             NodesToRemove.Add(Node);
