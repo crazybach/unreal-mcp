@@ -2385,22 +2385,36 @@ FString UMCPythonHelper::BuildBlueprintGraph(UBlueprint* Blueprint, const FStrin
         ConnObj->TryGetStringField(TEXT("target_node"), TargetNodeId);
         ConnObj->TryGetStringField(TEXT("target_pin"), TargetPinName);
 
-        UEdGraphNode** SourceNodePtr = NodeMap.Find(SourceNodeId);
-        UEdGraphNode** TargetNodePtr = NodeMap.Find(TargetNodeId);
+        // Look up in NodeMap first, then fall back to existing graph nodes by name
+        auto LookupNode = [&](const FString& NodeId) -> UEdGraphNode*
+        {
+            UEdGraphNode** Found = NodeMap.Find(NodeId);
+            if (Found && *Found) return *Found;
+            // Search existing graph nodes by name
+            for (UEdGraphNode* Node : Graph->Nodes)
+            {
+                if (Node && Node->GetName() == NodeId)
+                    return Node;
+            }
+            return nullptr;
+        };
 
-        if (!SourceNodePtr || !*SourceNodePtr)
+        UEdGraphNode* SourceNode = LookupNode(SourceNodeId);
+        UEdGraphNode* TargetNode = LookupNode(TargetNodeId);
+
+        if (!SourceNode)
         {
             ConnectionErrors.Add(FString::Printf(TEXT("Source node '%s' not found."), *SourceNodeId));
             continue;
         }
-        if (!TargetNodePtr || !*TargetNodePtr)
+        if (!TargetNode)
         {
             ConnectionErrors.Add(FString::Printf(TEXT("Target node '%s' not found."), *TargetNodeId));
             continue;
         }
 
-        UEdGraphPin* SourcePin = FindPinByName(*SourceNodePtr, SourcePinName);
-        UEdGraphPin* TargetPin = FindPinByName(*TargetNodePtr, TargetPinName);
+        UEdGraphPin* SourcePin = FindPinByName(SourceNode, SourcePinName);
+        UEdGraphPin* TargetPin = FindPinByName(TargetNode, TargetPinName);
 
         if (!SourcePin)
         {
