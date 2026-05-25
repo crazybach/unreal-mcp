@@ -1630,20 +1630,6 @@ FString UMCPythonHelper::AddFunctionGraph(UBlueprint* Blueprint, const FString& 
     // Add it to the FunctionGraphs array
     Blueprint->FunctionGraphs.Add(NewGraph);
 
-    // Create FunctionEntry node
-    FGraphNodeCreator<UK2Node_FunctionEntry> EntryCreator(*NewGraph);
-    UK2Node_FunctionEntry* EntryNode = EntryCreator.CreateNode(false);
-    EntryNode->NodePosX = 0;
-    EntryNode->NodePosY = 0;
-    EntryCreator.Finalize();
-
-    // Create FunctionResult node
-    FGraphNodeCreator<UK2Node_FunctionResult> ResultCreator(*NewGraph);
-    UK2Node_FunctionResult* ResultNode = ResultCreator.CreateNode(false);
-    ResultNode->NodePosX = 600;
-    ResultNode->NodePosY = 0;
-    ResultCreator.Finalize();
-
     FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
 
     TSharedPtr<FJsonObject> R = MakeShareable(new FJsonObject());
