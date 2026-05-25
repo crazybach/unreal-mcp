@@ -39,6 +39,7 @@
 #include "K2Node_Event.h"
 #include "K2Node_CustomEvent.h"
 #include "K2Node_CallFunction.h"
+#include "K2Node_CallArrayFunction.h"
 #include "K2Node_FunctionEntry.h"
 #include "K2Node_FunctionResult.h"
 #include "K2Node_IfThenElse.h"
@@ -1796,12 +1797,28 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
             return nullptr;
         }
 
-        FGraphNodeCreator<UK2Node_CallFunction> Creator(*Graph);
-        UK2Node_CallFunction* FuncNode = Creator.CreateNode(false);
-        FuncNode->SetFromFunction(TargetFunc);
-        FuncNode->NodePosX = PosX;
-        FuncNode->NodePosY = PosY;
-        Creator.Finalize();
+        const bool bIsArrayFunc = TargetFunc->HasMetaData(FBlueprintMetadata::MD_ArrayParam);
+        UEdGraphNode* FuncNode = nullptr;
+        if (bIsArrayFunc)
+        {
+            FGraphNodeCreator<UK2Node_CallArrayFunction> Creator(*Graph);
+            UK2Node_CallArrayFunction* ArrayFuncNode = Creator.CreateNode(false);
+            ArrayFuncNode->SetFromFunction(TargetFunc);
+            ArrayFuncNode->NodePosX = PosX;
+            ArrayFuncNode->NodePosY = PosY;
+            Creator.Finalize();
+            FuncNode = ArrayFuncNode;
+        }
+        else
+        {
+            FGraphNodeCreator<UK2Node_CallFunction> Creator(*Graph);
+            UK2Node_CallFunction* RegularFuncNode = Creator.CreateNode(false);
+            RegularFuncNode->SetFromFunction(TargetFunc);
+            RegularFuncNode->NodePosX = PosX;
+            RegularFuncNode->NodePosY = PosY;
+            Creator.Finalize();
+            FuncNode = RegularFuncNode;
+        }
         NewNode = FuncNode;
     }
     else if (NodeType == TEXT("Event"))
@@ -2126,12 +2143,8 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
     }
     else if (NodeType == TEXT("FunctionResult"))
     {
-        FGraphNodeCreator<UK2Node_FunctionResult> Creator(*Graph);
-        UK2Node_FunctionResult* ResultNode = Creator.CreateNode(false);
-        ResultNode->NodePosX = PosX;
-        ResultNode->NodePosY = PosY;
-
-        // Support user-specified return value pins
+        // Collect return value specs before creating node
+        TArray<TPair<FName, FEdGraphPinType>> ReturnPinSpecs;
         const TArray<TSharedPtr<FJsonValue>>* ReturnValues;
         if (NodeJson->TryGetArrayField(TEXT("return_values"), ReturnValues))
         {
@@ -2149,16 +2162,29 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
                         FEdGraphPinType PinTypeObj;
                         if (ParseVariableType(PinType, FString(), false, PinTypeObj))
                         {
-                            // Create the pin on the node manually before Finalize
-                            // so AllocateDefaultPins doesn't overwrite
-                            ResultNode->CreateUserDefinedPin(FName(*PinName), PinTypeObj, EGPD_Input, true);
+                            ReturnPinSpecs.Add(TPair<FName, FEdGraphPinType>(FName(*PinName), PinTypeObj));
                         }
                     }
                 }
             }
         }
 
+        FGraphNodeCreator<UK2Node_FunctionResult> Creator(*Graph);
+        UK2Node_FunctionResult* ResultNode = Creator.CreateNode(false);
+        ResultNode->NodePosX = PosX;
+        ResultNode->NodePosY = PosY;
         Creator.Finalize();
+
+        // Add return value pins after Finalize, then reconstruct to apply
+        for (const auto& Spec : ReturnPinSpecs)
+        {
+            ResultNode->CreateUserDefinedPin(Spec.Key, Spec.Value, EGPD_Input, false);
+        }
+        if (ReturnPinSpecs.Num() > 0)
+        {
+            ResultNode->ReconstructNode();
+        }
+
         NewNode = ResultNode;
     }
     else
