@@ -52,7 +52,6 @@ public class UnrealMCPython : ModuleRules
 				"Kismet",
 				"AIModule",
 				"GameplayTasks",
-				"GameplayTasksEditor",
 				"AIGraph",
 				"BehaviorTreeEditor",
 				"LiveCoding",

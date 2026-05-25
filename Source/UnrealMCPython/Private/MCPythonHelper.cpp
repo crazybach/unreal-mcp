@@ -49,7 +49,6 @@
 #include "K2Node_DynamicCast.h"
 #include "K2Node_InputKey.h"
 #include "K2Node_PromotableOperator.h"
-#include "K2Node_LatentGameplayTaskCall.h"
 #include "K2Node_SpawnActorFromClass.h"
 #include "K2Node_AsyncAction.h"
 #include "EdGraphSchema_K2.h"
@@ -1793,47 +1792,6 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
         FuncNode->NodePosY = PosY;
         Creator.Finalize();
         NewNode = FuncNode;
-    }
-    else if (NodeType == TEXT("LatentAbilityCall") || NodeType == TEXT("LatentGameplayTaskCall"))
-    {
-        FString TargetClass, FunctionName;
-        if (!NodeJson->TryGetStringField(TEXT("function_name"), FunctionName))
-        {
-            OutError = TEXT("LatentGameplayTaskCall node missing 'function_name'.");
-            return nullptr;
-        }
-        NodeJson->TryGetStringField(TEXT("target"), TargetClass);
-
-        UFunction* TargetFunc = nullptr;
-        if (!TargetClass.IsEmpty())
-        {
-            UClass* Cls = FindObject<UClass>(nullptr, *FString::Printf(TEXT("/Script/Engine.%s"), *TargetClass));
-            if (!Cls)
-                Cls = FindFirstObject<UClass>(*TargetClass, EFindFirstObjectOptions::NativeFirst);
-            if (Cls)
-                TargetFunc = Cls->FindFunctionByName(FName(*FunctionName));
-        }
-        if (!TargetFunc)
-        {
-            for (UClass* Cls = Blueprint->GeneratedClass; Cls && !TargetFunc; Cls = Cls->GetSuperClass())
-            {
-                TargetFunc = Cls->FindFunctionByName(FName(*FunctionName));
-            }
-        }
-        if (!TargetFunc)
-        {
-            OutError = FString::Printf(TEXT("Latent gameplay task '%s' not found (target: '%s')."), *FunctionName, *TargetClass);
-            return nullptr;
-        }
-
-        FGraphNodeCreator<UK2Node_LatentGameplayTaskCall> Creator(*Graph);
-        UK2Node_LatentGameplayTaskCall* TaskNode = Creator.CreateNode(false);
-        TaskNode->ProxyFactoryFunctionName = TargetFunc->GetFName();
-        TaskNode->ProxyFactoryClass = TargetFunc->GetOuterUClass();
-        TaskNode->NodePosX = PosX;
-        TaskNode->NodePosY = PosY;
-        Creator.Finalize();
-        NewNode = TaskNode;
     }
     else if (NodeType == TEXT("Event"))
     {
