@@ -2161,8 +2161,10 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
                     {
                         bool bIsArray = false;
                         (*Obj)->TryGetBoolField(TEXT("is_array"), bIsArray);
+                        FString VarSubType;
+                        (*Obj)->TryGetStringField(TEXT("sub_type"), VarSubType);
                         FEdGraphPinType PinTypeObj;
-                        if (ParseVariableType(PinType, FString(), bIsArray, PinTypeObj))
+                        if (ParseVariableType(PinType, VarSubType, bIsArray, PinTypeObj))
                         {
                             ReturnPinSpecs.Add(TPair<FName, FEdGraphPinType>(FName(*PinName), PinTypeObj));
                         }
