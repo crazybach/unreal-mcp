@@ -53,6 +53,9 @@
 #include "K2Node_CallParentFunction.h"
 #include "K2Node_SpawnActorFromClass.h"
 #include "K2Node_AsyncAction.h"
+#include "K2Node_LatentGameplayTaskCall.h"
+#include "K2Node_AddDelegate.h"
+#include "K2Node_CreateDelegate.h"
 #include "EdGraphSchema_K2.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
@@ -1254,7 +1257,7 @@ static bool ApplyPinDefault(UEdGraphNode* Node, UEdGraphPin* Pin, const TSharedP
     return true;
 }
 
-static bool SetAsyncActionProxyProperties(UK2Node_AsyncAction* AsyncNode, UClass* FactoryClass, UClass* ProxyClass, const FName FactoryFunctionName, FString& OutError)
+static bool SetAsyncActionProxyProperties(UK2Node_BaseAsyncTask* AsyncNode, UClass* FactoryClass, UClass* ProxyClass, const FName FactoryFunctionName, FString& OutError)
 {
     if (!AsyncNode || !FactoryClass || !ProxyClass || FactoryFunctionName.IsNone())
     {
@@ -2146,6 +2149,131 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
         Creator.Finalize();
         NewNode = AsyncNode;
     }
+    else if (NodeType == TEXT("LatentAbilityCall"))
+    {
+        // Same approach as AsyncAction but using UK2Node_LatentGameplayTaskCall
+        // for GameplayAbility latent tasks (WaitTargetData, WaitDelay, etc.)
+        FString FactoryClassPath, ProxyClassPath, FactoryFunctionName;
+        if (!NodeJson->TryGetStringField(TEXT("factory_class"), FactoryClassPath) || FactoryClassPath.IsEmpty())
+        {
+            OutError = TEXT("LatentAbilityCall node missing 'factory_class'.");
+            return nullptr;
+        }
+        if (!NodeJson->TryGetStringField(TEXT("proxy_class"), ProxyClassPath) || ProxyClassPath.IsEmpty())
+        {
+            OutError = TEXT("LatentAbilityCall node missing 'proxy_class'.");
+            return nullptr;
+        }
+        if (!NodeJson->TryGetStringField(TEXT("factory_function"), FactoryFunctionName) || FactoryFunctionName.IsEmpty())
+        {
+            OutError = TEXT("LatentAbilityCall node missing 'factory_function'.");
+            return nullptr;
+        }
+
+        UClass* FactoryClass = LoadClass<UObject>(nullptr, *FactoryClassPath);
+        if (!FactoryClass)
+            FactoryClass = FindFirstObject<UClass>(*FactoryClassPath, EFindFirstObjectOptions::NativeFirst);
+        UClass* ProxyClass = LoadClass<UObject>(nullptr, *ProxyClassPath);
+        if (!ProxyClass)
+            ProxyClass = FindFirstObject<UClass>(*ProxyClassPath, EFindFirstObjectOptions::NativeFirst);
+        if (!FactoryClass)
+        {
+            OutError = FString::Printf(TEXT("LatentAbilityCall factory class '%s' not found."), *FactoryClassPath);
+            return nullptr;
+        }
+        if (!ProxyClass)
+        {
+            OutError = FString::Printf(TEXT("LatentAbilityCall proxy class '%s' not found."), *ProxyClassPath);
+            return nullptr;
+        }
+        if (!FactoryClass->FindFunctionByName(FName(*FactoryFunctionName)))
+        {
+            OutError = FString::Printf(TEXT("LatentAbilityCall factory function '%s' not found on '%s'."),
+                *FactoryFunctionName, *FactoryClass->GetName());
+            return nullptr;
+        }
+
+        FGraphNodeCreator<UK2Node_LatentGameplayTaskCall> Creator(*Graph);
+        UK2Node_LatentGameplayTaskCall* TaskNode = Creator.CreateNode(false);
+        // Use same reflection approach as AsyncAction to set protected base class properties
+        if (!SetAsyncActionProxyProperties(TaskNode, FactoryClass, ProxyClass, FName(*FactoryFunctionName), OutError))
+        {
+            Creator.Finalize();
+            Graph->RemoveNode(TaskNode);
+            return nullptr;
+        }
+        TaskNode->NodePosX = PosX;
+        TaskNode->NodePosY = PosY;
+        Creator.Finalize();
+        NewNode = TaskNode;
+    }
+    else if (NodeType == TEXT("AddDelegate"))
+    {
+        FString DelegateName, OwnerClassPath;
+        if (!NodeJson->TryGetStringField(TEXT("delegate_name"), DelegateName) || DelegateName.IsEmpty())
+        {
+            OutError = TEXT("AddDelegate node missing 'delegate_name'.");
+            return nullptr;
+        }
+        if (!NodeJson->TryGetStringField(TEXT("owner_class"), OwnerClassPath) || OwnerClassPath.IsEmpty())
+        {
+            OutError = TEXT("AddDelegate node missing 'owner_class'.");
+            return nullptr;
+        }
+
+        UClass* OwnerClass = LoadClass<UObject>(nullptr, *OwnerClassPath);
+        if (!OwnerClass)
+            OwnerClass = FindFirstObject<UClass>(*OwnerClassPath, EFindFirstObjectOptions::NativeFirst);
+        if (!OwnerClass)
+        {
+            OutError = FString::Printf(TEXT("AddDelegate owner class '%s' not found."), *OwnerClassPath);
+            return nullptr;
+        }
+
+        FMulticastDelegateProperty* DelegateProp = FindFProperty<FMulticastDelegateProperty>(OwnerClass, FName(*DelegateName));
+        if (!DelegateProp)
+        {
+            OutError = FString::Printf(TEXT("AddDelegate property '%s' not found on class '%s'."), *DelegateName, *OwnerClass->GetName());
+            return nullptr;
+        }
+
+        FGraphNodeCreator<UK2Node_AddDelegate> Creator(*Graph);
+        UK2Node_AddDelegate* AddDelegateNode = Creator.CreateNode(false);
+        AddDelegateNode->SetFromProperty(DelegateProp, false, OwnerClass);
+        AddDelegateNode->NodePosX = PosX;
+        AddDelegateNode->NodePosY = PosY;
+        Creator.Finalize();
+        NewNode = AddDelegateNode;
+    }
+    else if (NodeType == TEXT("CreateDelegate"))
+    {
+        FString FunctionName, OwnerClassPath;
+        if (!NodeJson->TryGetStringField(TEXT("function_name"), FunctionName) || FunctionName.IsEmpty())
+        {
+            OutError = TEXT("CreateDelegate node missing 'function_name'.");
+            return nullptr;
+        }
+
+        FGraphNodeCreator<UK2Node_CreateDelegate> Creator(*Graph);
+        UK2Node_CreateDelegate* CreateDelegateNode = Creator.CreateNode(false);
+        CreateDelegateNode->SetFunction(FName(*FunctionName));
+
+        // Optionally set scope class
+        NodeJson->TryGetStringField(TEXT("owner_class"), OwnerClassPath);
+        if (!OwnerClassPath.IsEmpty())
+        {
+            UClass* ScopeClass = LoadClass<UObject>(nullptr, *OwnerClassPath);
+            if (ScopeClass)
+            {
+                CreateDelegateNode->SelectedFunctionGuid = FGuid(); // Clear GUID to use function name
+            }
+        }
+
+        CreateDelegateNode->NodePosX = PosX;
+        CreateDelegateNode->NodePosY = PosY;
+        Creator.Finalize();
+        NewNode = CreateDelegateNode;
+    }
     else if (NodeType == TEXT("FunctionResult"))
     {
         // Collect return value specs
@@ -2218,7 +2346,7 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
     }
     else
     {
-        OutError = FString::Printf(TEXT("Unknown node type '%s'. Supported: CallFunction, Event, CustomEvent, CastTo, Branch, Sequence, PromotableOperator, VariableGet, VariableSet, MacroInstance, InputKey, SpawnActor, AsyncAction, FunctionResult."), *NodeType);
+        OutError = FString::Printf(TEXT("Unknown node type '%s'. Supported: CallFunction, Event, CustomEvent, CastTo, Branch, Sequence, PromotableOperator, VariableGet, VariableSet, MacroInstance, InputKey, SpawnActor, AsyncAction, LatentAbilityCall, AddDelegate, CreateDelegate, FunctionResult."), *NodeType);
         return nullptr;
     }
 
