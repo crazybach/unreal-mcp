@@ -2143,7 +2143,7 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
     }
     else if (NodeType == TEXT("FunctionResult"))
     {
-        // Collect return value specs before creating node
+        // Collect return value specs
         TArray<TPair<FName, FEdGraphPinType>> ReturnPinSpecs;
         const TArray<TSharedPtr<FJsonValue>>* ReturnValues;
         if (NodeJson->TryGetArrayField(TEXT("return_values"), ReturnValues))
@@ -2159,7 +2159,7 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
 
                     if (!PinName.IsEmpty() && !PinType.IsEmpty())
                     {
-                        bool bIsArray = true; // Force array for debugging -- TODO remove
+                        bool bIsArray = false;
                         (*Obj)->TryGetBoolField(TEXT("is_array"), bIsArray);
                         FString VarSubType;
                         (*Obj)->TryGetStringField(TEXT("sub_type"), VarSubType);
@@ -2177,14 +2177,14 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
         UK2Node_FunctionResult* ResultNode = Creator.CreateNode(false);
         ResultNode->NodePosX = PosX;
         ResultNode->NodePosY = PosY;
+        Creator.Finalize();
 
-        // Add return value pins BEFORE Finalize so AllocateDefaultPins can create them
+        // Use CreatePin directly (bypasses CanCreateUserDefinedPin which returns false for FunctionResult)
         for (const auto& Spec : ReturnPinSpecs)
         {
-            ResultNode->CreateUserDefinedPin(Spec.Key, Spec.Value, EGPD_Input, false);
+            ResultNode->CreatePin(EGPD_Input, Spec.Value, Spec.Key);
         }
 
-        Creator.Finalize();
         NewNode = ResultNode;
     }
     else
