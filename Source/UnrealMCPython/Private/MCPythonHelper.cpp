@@ -1635,14 +1635,6 @@ FString UMCPythonHelper::AddFunctionGraph(UBlueprint* Blueprint, const FString& 
     UK2Node_FunctionEntry* EntryNode = EntryCreator.CreateNode(false);
     EntryNode->NodePosX = 0;
     EntryNode->NodePosY = 0;
-
-    // Check if this is an override (parent class has a function with same name)
-    UFunction* ParentFunc = Blueprint->ParentClass->FindFunctionByName(FName(*FuncName));
-    if (ParentFunc)
-    {
-        EntryNode->FunctionReference.SetExternalMember(FName(*FuncName), Blueprint->ParentClass);
-    }
-
     EntryCreator.Finalize();
 
     // Create FunctionResult node
