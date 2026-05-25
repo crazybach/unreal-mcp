@@ -1681,16 +1681,26 @@ FString UMCPythonHelper::AddFunctionGraph(UBlueprint* Blueprint, const FString& 
     if (!NewGraph)
         return MakeJsonError(FString::Printf(TEXT("Failed to create function graph '%s'."), *FuncName));
 
-    // Add it to the FunctionGraphs array
-    Blueprint->FunctionGraphs.Add(NewGraph);
+    // Check if this function is an override of a parent function
+    UClass* OverrideClass = FBlueprintEditorUtils::GetOverrideFunctionClass(Blueprint, FName(*FuncName));
 
-    // Create FunctionEntry with self-reference so compiler knows it's a valid function
-    FGraphNodeCreator<UK2Node_FunctionEntry> EntryCreator(*NewGraph);
-    UK2Node_FunctionEntry* EntryNode = EntryCreator.CreateNode(false);
-    EntryNode->FunctionReference.SetSelfMember(FName(*FuncName));
-    EntryNode->NodePosX = 0;
-    EntryNode->NodePosY = 0;
-    EntryCreator.Finalize();
+    if (OverrideClass)
+    {
+        // Override: use AddFunctionGraph with the parent class (mirrors UE editor behavior)
+        FBlueprintEditorUtils::AddFunctionGraph(Blueprint, NewGraph, /*bIsUserCreated=*/false, OverrideClass);
+    }
+    else
+    {
+        // New function: add to FunctionGraphs and create FunctionEntry manually
+        Blueprint->FunctionGraphs.Add(NewGraph);
+
+        FGraphNodeCreator<UK2Node_FunctionEntry> EntryCreator(*NewGraph);
+        UK2Node_FunctionEntry* EntryNode = EntryCreator.CreateNode(false);
+        EntryNode->FunctionReference.SetSelfMember(FName(*FuncName));
+        EntryNode->NodePosX = 0;
+        EntryNode->NodePosY = 0;
+        EntryCreator.Finalize();
+    }
 
     FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
 
