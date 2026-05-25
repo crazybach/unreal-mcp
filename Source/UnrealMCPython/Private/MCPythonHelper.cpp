@@ -1828,7 +1828,8 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
 
         FGraphNodeCreator<UK2Node_LatentGameplayTaskCall> Creator(*Graph);
         UK2Node_LatentGameplayTaskCall* TaskNode = Creator.CreateNode(false);
-        TaskNode->SetFromFunction(TargetFunc);
+        TaskNode->ProxyFactoryFunctionName = TargetFunc->GetFName();
+        TaskNode->ProxyFactoryClass = TargetFunc->GetOuterUClass();
         TaskNode->NodePosX = PosX;
         TaskNode->NodePosY = PosY;
         Creator.Finalize();
