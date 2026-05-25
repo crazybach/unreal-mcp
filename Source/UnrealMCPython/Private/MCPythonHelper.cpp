@@ -2182,13 +2182,13 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
         // The FunctionResult will auto-generate matching input pins
         for (UEdGraphNode* Node : Graph->Nodes)
         {
-            if (Node && Node->IsA<UK2Node_FunctionEntry>())
+            if (UK2Node_FunctionEntry* EntryNode = Cast<UK2Node_FunctionEntry>(Node))
             {
                 for (const auto& Spec : ReturnPinSpecs)
                 {
-                    Node->CreateUserDefinedPin(Spec.Key, Spec.Value, EGPD_Output, false);
+                    EntryNode->CreateUserDefinedPin(Spec.Key, Spec.Value, EGPD_Output, false);
                 }
-                Node->ReconstructNode();
+                EntryNode->ReconstructNode();
                 break;
             }
         }
