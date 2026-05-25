@@ -2130,6 +2130,35 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
         UK2Node_FunctionResult* ResultNode = Creator.CreateNode(false);
         ResultNode->NodePosX = PosX;
         ResultNode->NodePosY = PosY;
+
+        // Support user-specified return value pins
+        const TArray<TSharedPtr<FJsonValue>>* ReturnValues;
+        if (NodeJson->TryGetArrayField(TEXT("return_values"), ReturnValues))
+        {
+            for (const TSharedPtr<FJsonValue>& Val : *ReturnValues)
+            {
+                const TSharedPtr<FJsonObject>* Obj;
+                if (Val->TryGetObject(Obj))
+                {
+                    FString PinName, PinType;
+                    (*Obj)->TryGetStringField(TEXT("name"), PinName);
+                    (*Obj)->TryGetStringField(TEXT("type"), PinType);
+
+                    if (!PinName.IsEmpty() && !PinType.IsEmpty())
+                    {
+                        FEdGraphPinType PinTypeObj;
+                        FString VarSubType;
+                        if (ParseVariableType(PinType, VarSubType, false, PinTypeObj, OutError))
+                        {
+                            // Create the pin on the node manually before Finalize
+                            // so AllocateDefaultPins doesn't overwrite
+                            ResultNode->CreateUserDefinedPin(FName(*PinName), PinTypeObj, EGPD_Input, true);
+                        }
+                    }
+                }
+            }
+        }
+
         Creator.Finalize();
         NewNode = ResultNode;
     }
