@@ -49,6 +49,7 @@
 #include "K2Node_DynamicCast.h"
 #include "K2Node_InputKey.h"
 #include "K2Node_PromotableOperator.h"
+#include "K2Node_CallParentFunction.h"
 #include "K2Node_SpawnActorFromClass.h"
 #include "K2Node_AsyncAction.h"
 #include "EdGraphSchema_K2.h"
@@ -1903,6 +1904,13 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
         UK2Node_PromotableOperator* OpNode = Creator.CreateNode(false);
         OpNode->NodePosX = PosX;
         OpNode->NodePosY = PosY;
+
+        FString OperationName;
+        if (NodeJson->TryGetStringField(TEXT("operation_name"), OperationName) && !OperationName.IsEmpty())
+        {
+            OpNode->OperationName = FName(*OperationName);
+        }
+
         Creator.Finalize();
         NewNode = OpNode;
     }
@@ -2123,9 +2131,18 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
         Creator.Finalize();
         NewNode = AsyncNode;
     }
+    else if (NodeType == TEXT("FunctionResult"))
+    {
+        FGraphNodeCreator<UK2Node_FunctionResult> Creator(*Graph);
+        UK2Node_FunctionResult* ResultNode = Creator.CreateNode(false);
+        ResultNode->NodePosX = PosX;
+        ResultNode->NodePosY = PosY;
+        Creator.Finalize();
+        NewNode = ResultNode;
+    }
     else
     {
-        OutError = FString::Printf(TEXT("Unknown node type '%s'. Supported: CallFunction, Event, CustomEvent, CastTo, Branch, Sequence, PromotableOperator, VariableGet, VariableSet, MacroInstance, InputKey, SpawnActor, AsyncAction."), *NodeType);
+        OutError = FString::Printf(TEXT("Unknown node type '%s'. Supported: CallFunction, Event, CustomEvent, CastTo, Branch, Sequence, PromotableOperator, VariableGet, VariableSet, MacroInstance, InputKey, SpawnActor, AsyncAction, FunctionResult."), *NodeType);
         return nullptr;
     }
 
@@ -2370,7 +2387,8 @@ FString UMCPythonHelper::BuildBlueprintGraph(UBlueprint* Blueprint, const FStrin
         // For EventGraph, we typically remove all non-essential nodes
         if (!Node->IsA<UK2Node_Event>() &&
             !Node->IsA<UK2Node_FunctionEntry>() &&
-            !Node->IsA<UK2Node_FunctionResult>())
+            !Node->IsA<UK2Node_FunctionResult>() &&
+            !Node->IsA<UK2Node_CallParentFunction>())
         {
             NodesToRemove.Add(Node);
         }
