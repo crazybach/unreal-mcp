@@ -2147,8 +2147,7 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
                     if (!PinName.IsEmpty() && !PinType.IsEmpty())
                     {
                         FEdGraphPinType PinTypeObj;
-                        FString VarSubType;
-                        if (ParseVariableType(PinType, VarSubType, false, PinTypeObj, OutError))
+                        if (ParseVariableType(PinType, FString(), false, PinTypeObj))
                         {
                             // Create the pin on the node manually before Finalize
                             // so AllocateDefaultPins doesn't overwrite
