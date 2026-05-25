@@ -1008,6 +1008,55 @@ static UEdGraphPin* FindPinByName(UEdGraphNode* Node, const FString& PinName, EE
     return nullptr;
 }
 
+static bool ConnectPinsWithSchema(UEdGraph* Graph, UEdGraphPin* SourcePin, UEdGraphPin* TargetPin, FString& OutError)
+{
+    if (!Graph || !SourcePin || !TargetPin)
+    {
+        OutError = TEXT("Invalid graph or pin.");
+        return false;
+    }
+
+    if (SourcePin->Direction == TargetPin->Direction)
+    {
+        OutError = FString::Printf(TEXT("Cannot connect pins with same direction (%s)."),
+            SourcePin->Direction == EGPD_Input ? TEXT("both Input") : TEXT("both Output"));
+        return false;
+    }
+
+    const UEdGraphSchema* Schema = Graph->GetSchema();
+    if (Schema)
+    {
+        const FPinConnectionResponse Response = Schema->CanCreateConnection(SourcePin, TargetPin);
+        if (Response.Response == CONNECT_RESPONSE_DISALLOW)
+        {
+            OutError = FString::Printf(TEXT("Connection not allowed: %s"), *Response.Message.ToString());
+            return false;
+        }
+
+        if (!Schema->TryCreateConnection(SourcePin, TargetPin))
+        {
+            OutError = FString::Printf(TEXT("Connection failed: %s"), *Response.Message.ToString());
+            return false;
+        }
+    }
+    else
+    {
+        SourcePin->MakeLinkTo(TargetPin);
+    }
+
+    // Notify both nodes of pin connection change to resolve wildcard types (e.g. ForEachLoop).
+    if (UEdGraphNode* SourceNode = SourcePin->GetOwningNode())
+    {
+        SourceNode->PinConnectionListChanged(SourcePin);
+    }
+    if (UEdGraphNode* TargetNode = TargetPin->GetOwningNode())
+    {
+        TargetNode->PinConnectionListChanged(TargetPin);
+    }
+
+    return true;
+}
+
 // ─── Variable Type Helper ──────────────────────────────────────────────
 
 static bool ParseVariableType(const FString& VarTypeStr,
@@ -1425,8 +1474,8 @@ FString UMCPythonHelper::AddBlueprintVariable(UBlueprint* Blueprint,
     NewVar.VarType = PinType;
     NewVar.FriendlyName = VarName;
     NewVar.DefaultValue = DefaultValue;
-    // Default to Edit (instance editable) + BlueprintVisible
-    NewVar.PropertyFlags = CPF_Edit | CPF_BlueprintVisible | CPF_DisableEditOnInstance;
+    // Default to Edit (instance editable) + BlueprintVisible.
+    NewVar.PropertyFlags = CPF_Edit | CPF_BlueprintVisible;
     Blueprint->NewVariables.Add(NewVar);
 
     FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
@@ -1513,9 +1562,14 @@ FString UMCPythonHelper::SetBlueprintVariableProperty(UBlueprint* Blueprint,
     else if (Property.Equals(TEXT("instance_editable"), ESearchCase::IgnoreCase))
     {
         if (bValueBool)
+        {
             FoundVar->PropertyFlags |= CPF_Edit;
+            FoundVar->PropertyFlags &= ~CPF_DisableEditOnInstance;
+        }
         else
-            FoundVar->PropertyFlags &= ~CPF_Edit;
+        {
+            FoundVar->PropertyFlags |= CPF_Edit | CPF_DisableEditOnInstance;
+        }
     }
     else if (Property.Equals(TEXT("blueprint_read_only"), ESearchCase::IgnoreCase))
     {
@@ -2050,6 +2104,8 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
         UK2Node_AsyncAction* AsyncNode = Creator.CreateNode(false);
         if (!SetAsyncActionProxyProperties(AsyncNode, FactoryClass, ProxyClass, FName(*FactoryFunctionName), OutError))
         {
+            Creator.Finalize();
+            Graph->RemoveNode(AsyncNode);
             return nullptr;
         }
         AsyncNode->NodePosX = PosX;
@@ -2059,7 +2115,7 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
     }
     else
     {
-        OutError = FString::Printf(TEXT("Unknown node type '%s'. Supported: CallFunction, Event, CustomEvent, CastTo, Branch, Sequence, VariableGet, VariableSet, MacroInstance, InputKey, SpawnActor, AsyncAction."), *NodeType);
+        OutError = FString::Printf(TEXT("Unknown node type '%s'. Supported: CallFunction, Event, CustomEvent, CastTo, Branch, Sequence, PromotableOperator, VariableGet, VariableSet, MacroInstance, InputKey, SpawnActor, AsyncAction."), *NodeType);
         return nullptr;
     }
 
@@ -2169,30 +2225,9 @@ FString UMCPythonHelper::ConnectBlueprintPins(UBlueprint* Blueprint, const FStri
             *TargetPinName, *TargetNodeName, *FString::Join(PinNames, TEXT(", "))));
     }
 
-    // Verify directions are compatible (output -> input)
-    if (SourcePin->Direction == TargetPin->Direction)
-        return MakeJsonError(FString::Printf(TEXT("Cannot connect pins with same direction (%s)."),
-            SourcePin->Direction == EGPD_Input ? TEXT("both Input") : TEXT("both Output")));
-
-    // Check if connection is allowed by the schema and handle BREAK_OTHERS
-    const UEdGraphSchema* Schema = Graph->GetSchema();
-    if (Schema)
-    {
-        FPinConnectionResponse Response = Schema->CanCreateConnection(SourcePin, TargetPin);
-        if (Response.Response == CONNECT_RESPONSE_DISALLOW)
-            return MakeJsonError(FString::Printf(TEXT("Connection not allowed: %s"), *Response.Message.ToString()));
-        // Break existing connections when schema requires it (e.g. exec output already connected)
-        if (Response.Response == CONNECT_RESPONSE_BREAK_OTHERS_A)
-            SourcePin->BreakAllPinLinks();
-        else if (Response.Response == CONNECT_RESPONSE_BREAK_OTHERS_B)
-            TargetPin->BreakAllPinLinks();
-    }
-
-    SourcePin->MakeLinkTo(TargetPin);
-
-    // Notify both nodes of pin connection change to resolve wildcard types (e.g. ForEachLoop)
-    SourceNode->PinConnectionListChanged(SourcePin);
-    TargetNode->PinConnectionListChanged(TargetPin);
+    FString ConnectionError;
+    if (!ConnectPinsWithSchema(Graph, SourcePin, TargetPin, ConnectionError))
+        return MakeJsonError(ConnectionError);
 
     FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
     return MakeJsonSuccess(FString::Printf(TEXT("Connected %s.%s -> %s.%s"),
@@ -2422,11 +2457,12 @@ FString UMCPythonHelper::BuildBlueprintGraph(UBlueprint* Blueprint, const FStrin
             continue;
         }
 
-        SourcePin->MakeLinkTo(TargetPin);
-
-        // Notify both nodes of pin connection change to resolve wildcard types (e.g. ForEachLoop)
-        SourcePin->GetOwningNode()->PinConnectionListChanged(SourcePin);
-        TargetPin->GetOwningNode()->PinConnectionListChanged(TargetPin);
+        FString ConnectionError;
+        if (!ConnectPinsWithSchema(Graph, SourcePin, TargetPin, ConnectionError))
+        {
+            ConnectionErrors.Add(FString::Printf(TEXT("%s.%s -> %s.%s: %s"),
+                *SourceNodeId, *SourcePinName, *TargetNodeId, *TargetPinName, *ConnectionError));
+        }
     }
 
     // Layout nodes
