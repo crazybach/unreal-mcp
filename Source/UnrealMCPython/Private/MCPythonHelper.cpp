@@ -2165,6 +2165,10 @@ FString UMCPythonHelper::ConnectBlueprintPins(UBlueprint* Blueprint, const FStri
 
     SourcePin->MakeLinkTo(TargetPin);
 
+    // Notify both nodes of pin connection change to resolve wildcard types (e.g. ForEachLoop)
+    SourceNode->PinConnectionListChanged(SourcePin);
+    TargetNode->PinConnectionListChanged(TargetPin);
+
     FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
     return MakeJsonSuccess(FString::Printf(TEXT("Connected %s.%s -> %s.%s"),
         *SourceNodeName, *SourcePinName, *TargetNodeName, *TargetPinName));
@@ -2378,6 +2382,10 @@ FString UMCPythonHelper::BuildBlueprintGraph(UBlueprint* Blueprint, const FStrin
         }
 
         SourcePin->MakeLinkTo(TargetPin);
+
+        // Notify both nodes of pin connection change to resolve wildcard types (e.g. ForEachLoop)
+        SourcePin->GetOwningNode()->PinConnectionListChanged(SourcePin);
+        TargetPin->GetOwningNode()->PinConnectionListChanged(TargetPin);
     }
 
     // Layout nodes
