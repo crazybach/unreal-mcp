@@ -2159,7 +2159,7 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
 
                     if (!PinName.IsEmpty() && !PinType.IsEmpty())
                     {
-                        bool bIsArray = false;
+                        bool bIsArray = true; // Force array for debugging -- TODO remove
                         (*Obj)->TryGetBoolField(TEXT("is_array"), bIsArray);
                         FString VarSubType;
                         (*Obj)->TryGetStringField(TEXT("sub_type"), VarSubType);
