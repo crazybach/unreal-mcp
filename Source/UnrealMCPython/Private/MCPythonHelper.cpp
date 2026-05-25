@@ -49,7 +49,6 @@
 #include "K2Node_DynamicCast.h"
 #include "K2Node_InputKey.h"
 #include "K2Node_PromotableOperator.h"
-#include "K2Node_LatentAbilityCall.h"
 #include "K2Node_LatentGameplayTaskCall.h"
 #include "K2Node_SpawnActorFromClass.h"
 #include "K2Node_AsyncAction.h"
@@ -1795,47 +1794,7 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
         Creator.Finalize();
         NewNode = FuncNode;
     }
-    else if (NodeType == TEXT("LatentAbilityCall"))
-    {
-        FString TargetClass, FunctionName;
-        if (!NodeJson->TryGetStringField(TEXT("function_name"), FunctionName))
-        {
-            OutError = TEXT("LatentAbilityCall node missing 'function_name'.");
-            return nullptr;
-        }
-        NodeJson->TryGetStringField(TEXT("target"), TargetClass);
-
-        UFunction* TargetFunc = nullptr;
-        if (!TargetClass.IsEmpty())
-        {
-            UClass* Cls = FindObject<UClass>(nullptr, *FString::Printf(TEXT("/Script/Engine.%s"), *TargetClass));
-            if (!Cls)
-                Cls = FindFirstObject<UClass>(*TargetClass, EFindFirstObjectOptions::NativeFirst);
-            if (Cls)
-                TargetFunc = Cls->FindFunctionByName(FName(*FunctionName));
-        }
-        if (!TargetFunc)
-        {
-            for (UClass* Cls = Blueprint->GeneratedClass; Cls && !TargetFunc; Cls = Cls->GetSuperClass())
-            {
-                TargetFunc = Cls->FindFunctionByName(FName(*FunctionName));
-            }
-        }
-        if (!TargetFunc)
-        {
-            OutError = FString::Printf(TEXT("Latent function '%s' not found (target: '%s')."), *FunctionName, *TargetClass);
-            return nullptr;
-        }
-
-        FGraphNodeCreator<UK2Node_LatentAbilityCall> Creator(*Graph);
-        UK2Node_LatentAbilityCall* LatentNode = Creator.CreateNode(false);
-        LatentNode->SetFromFunction(TargetFunc);
-        LatentNode->NodePosX = PosX;
-        LatentNode->NodePosY = PosY;
-        Creator.Finalize();
-        NewNode = LatentNode;
-    }
-    else if (NodeType == TEXT("LatentGameplayTaskCall"))
+    else if (NodeType == TEXT("LatentAbilityCall") || NodeType == TEXT("LatentGameplayTaskCall"))
     {
         FString TargetClass, FunctionName;
         if (!NodeJson->TryGetStringField(TEXT("function_name"), FunctionName))
