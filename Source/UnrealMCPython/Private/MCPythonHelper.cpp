@@ -1783,7 +1783,16 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
         UFunction* TargetFunc = nullptr;
         if (!TargetClass.IsEmpty())
         {
-            UClass* Cls = FindObject<UClass>(nullptr, *FString::Printf(TEXT("/Script/Engine.%s"), *TargetClass));
+            UClass* Cls = nullptr;
+            // Support full paths like /Script/GameplayAbilities.GameplayAbility
+            if (TargetClass.StartsWith(TEXT("/Script/")))
+            {
+                Cls = FindObject<UClass>(nullptr, *TargetClass);
+            }
+            else
+            {
+                Cls = FindObject<UClass>(nullptr, *FString::Printf(TEXT("/Script/Engine.%s"), *TargetClass));
+            }
             if (!Cls)
                 Cls = FindFirstObject<UClass>(*TargetClass, EFindFirstObjectOptions::NativeFirst);
             if (Cls)
@@ -2438,7 +2447,7 @@ FString UMCPythonHelper::ConnectBlueprintPins(UBlueprint* Blueprint, const FStri
     if (!TargetNode)
         return MakeJsonError(FString::Printf(TEXT("Target node '%s' not found."), *TargetNodeName));
 
-    UEdGraphPin* SourcePin = FindPinByName(SourceNode, SourcePinName);
+    UEdGraphPin* SourcePin = FindPinByName(SourceNode, SourcePinName, EGPD_Output);
     if (!SourcePin)
     {
         TArray<FString> PinNames;
@@ -2447,7 +2456,7 @@ FString UMCPythonHelper::ConnectBlueprintPins(UBlueprint* Blueprint, const FStri
             *SourcePinName, *SourceNodeName, *FString::Join(PinNames, TEXT(", "))));
     }
 
-    UEdGraphPin* TargetPin = FindPinByName(TargetNode, TargetPinName);
+    UEdGraphPin* TargetPin = FindPinByName(TargetNode, TargetPinName, EGPD_Input);
     if (!TargetPin)
     {
         TArray<FString> PinNames;
@@ -2674,8 +2683,8 @@ FString UMCPythonHelper::BuildBlueprintGraph(UBlueprint* Blueprint, const FStrin
             continue;
         }
 
-        UEdGraphPin* SourcePin = FindPinByName(SourceNode, SourcePinName);
-        UEdGraphPin* TargetPin = FindPinByName(TargetNode, TargetPinName);
+        UEdGraphPin* SourcePin = FindPinByName(SourceNode, SourcePinName, EGPD_Output);
+        UEdGraphPin* TargetPin = FindPinByName(TargetNode, TargetPinName, EGPD_Input);
 
         if (!SourcePin)
         {
