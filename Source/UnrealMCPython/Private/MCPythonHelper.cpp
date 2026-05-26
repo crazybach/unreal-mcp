@@ -1908,10 +1908,15 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
         }
         FGraphNodeCreator<UK2Node_DynamicCast> Creator(*Graph);
         UK2Node_DynamicCast* CastNode = Creator.CreateNode(false);
-        CastNode->TargetType = TargetClass;
         CastNode->NodePosX = PosX;
         CastNode->NodePosY = PosY;
         Creator.Finalize();
+
+        // Set TargetType after Finalize to avoid FindPinChecked crash during AllocateDefaultPins
+        // when the loaded BP class has special display name characteristics
+        CastNode->TargetType = TargetClass;
+        CastNode->ReconstructNode();
+
         NewNode = CastNode;
     }
     else if (NodeType == TEXT("Branch"))
@@ -2101,6 +2106,18 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
         SpawnNode->NodePosX = PosX;
         SpawnNode->NodePosY = PosY;
         Creator.Finalize();
+
+        // Set spawn class if provided from config
+        FString SpawnClass;
+        if (NodeJson->TryGetStringField(TEXT("spawn_class"), SpawnClass) && !SpawnClass.IsEmpty())
+        {
+            UClass* Class = LoadClass<UObject>(nullptr, *SpawnClass);
+            if (Class)
+            {
+                SpawnNode->CreatePinsForClass(Class);
+            }
+        }
+
         NewNode = SpawnNode;
     }
     else if (NodeType == TEXT("AsyncAction"))
