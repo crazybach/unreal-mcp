@@ -2420,18 +2420,22 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
         UK2Node_SpawnActorFromClass* SpawnNode = Creator.CreateNode(false);
         SpawnNode->NodePosX = PosX;
         SpawnNode->NodePosY = PosY;
-        Creator.Finalize();
 
-        // Set spawn class if provided from config
+        // Set spawn class BEFORE Finalize to avoid crash (CreatePinsForClass
+        // must run before AllocateDefaultPins which happens in Finalize).
         FString SpawnClass;
         if (NodeJson->TryGetStringField(TEXT("spawn_class"), SpawnClass) && !SpawnClass.IsEmpty())
         {
-            UClass* Class = LoadClass<UObject>(nullptr, *SpawnClass);
+            UClass* Class = FindObject<UClass>(ANY_PACKAGE, *SpawnClass);
+            if (!Class)
+                Class = LoadClass<UObject>(nullptr, *SpawnClass);
             if (Class)
             {
                 SpawnNode->CreatePinsForClass(Class);
             }
         }
+
+        Creator.Finalize();
 
         NewNode = SpawnNode;
     }
