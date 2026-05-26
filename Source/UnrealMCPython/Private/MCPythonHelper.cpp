@@ -2406,22 +2406,22 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
     else if (NodeType == TEXT("SpawnActor"))
     {
         // Safety: UK2Node_SpawnActorFromClass requires event graph context.
-        // Function graphs will crash at CreateNode() with assertion failure.
         for (UEdGraphNode* N : Graph->Nodes)
         {
             if (N && N->IsA<UK2Node_FunctionEntry>())
             {
-                OutError = TEXT("SpawnActor node type is incompatible with function graphs. Use CallFunction with 'BeginDeferredActorSpawnFromClass' (target: GameplayStatics) instead.");
+                OutError = TEXT("SpawnActor node type is incompatible with function graphs.");
                 return nullptr;
             }
         }
 
-        // WARNING: Do NOT call CreatePinsForClass — it crashes Unreal when
-        // called on UK2Node_SpawnActorFromClass outside of editor UI context.
-        // Let Finalize() create default pins; the spawn class can be set
-        // via the Class pin default after node creation.
+        // AllocateDefaultPins MUST be called before Finalize().
+        // Finalize() calls PostPlacedNewNode() first, then AllocateDefaultPins()
+        // only if Pins.Num()==0. But UK2Node_SpawnActorFromClass::PostPlacedNewNode()
+        // calls FindPinChecked() which asserts if pins aren't already allocated.
         FGraphNodeCreator<UK2Node_SpawnActorFromClass> Creator(*Graph);
         UK2Node_SpawnActorFromClass* SpawnNode = Creator.CreateNode(false);
+        SpawnNode->AllocateDefaultPins();
         SpawnNode->NodePosX = PosX;
         SpawnNode->NodePosY = PosY;
         Creator.Finalize();
