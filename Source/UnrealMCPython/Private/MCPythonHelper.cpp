@@ -1074,7 +1074,7 @@ static bool ParseVariableType(const FString& VarTypeStr,
     {
         if (SubTypeStr.IsEmpty()) return nullptr;
         // Try as a short class name (e.g. "Actor", "BaseTankPawn")
-        if (UClass* FoundClass = FindObject<UClass>(nullptr, *SubTypeStr))
+        if (UClass* FoundClass = FindObject<UClass>(ANY_PACKAGE, *SubTypeStr))
             return FoundClass;
         // Try as a full class path (e.g. "/Script/Engine.Actor")
         UClass* AsClass = LoadClass<UObject>(nullptr, *SubTypeStr);
