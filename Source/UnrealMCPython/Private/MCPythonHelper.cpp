@@ -56,6 +56,7 @@
 #include "K2Node_LatentGameplayTaskCall.h"
 #include "K2Node_AddDelegate.h"
 #include "K2Node_CreateDelegate.h"
+#include "K2Node_ClassDynamicCast.h"
 #include "EdGraphSchema_K2.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
@@ -2167,6 +2168,33 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
         CastNode->TargetType = TargetClass;
         CastNode->ReconstructNode();
 
+        NewNode = CastNode;
+    }
+    else if (NodeType == TEXT("ClassDynamicCast"))
+    {
+        FString CastClass;
+        if (!NodeJson->TryGetStringField(TEXT("cast_class"), CastClass))
+        {
+            OutError = TEXT("ClassDynamicCast node missing 'cast_class'.");
+            return nullptr;
+        }
+        UClass* TargetClass = FindObject<UClass>(ANY_PACKAGE, *CastClass);
+        if (!TargetClass)
+            TargetClass = LoadClass<UObject>(nullptr, *CastClass);
+        if (!TargetClass)
+            TargetClass = LoadClass<UObject>(nullptr, *FString::Printf(TEXT("/Script/Engine.%s"), *CastClass));
+        if (!TargetClass)
+        {
+            OutError = FString::Printf(TEXT("ClassDynamicCast: class '%s' not found."), *CastClass);
+            return nullptr;
+        }
+        FGraphNodeCreator<UK2Node_ClassDynamicCast> Creator(*Graph);
+        UK2Node_ClassDynamicCast* CastNode = Creator.CreateNode(false);
+        CastNode->NodePosX = PosX;
+        CastNode->NodePosY = PosY;
+        Creator.Finalize();
+        CastNode->TargetType = TargetClass;
+        CastNode->ReconstructNode();
         NewNode = CastNode;
     }
     else if (NodeType == TEXT("Branch"))
