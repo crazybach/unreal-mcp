@@ -1843,10 +1843,13 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
         if (!TargetClass.IsEmpty())
         {
             UClass* Cls = nullptr;
+            UScriptStruct* SS = nullptr;
             // Support full paths like /Script/GameplayAbilities.GameplayAbility
             if (TargetClass.StartsWith(TEXT("/Script/")))
             {
                 Cls = FindObject<UClass>(nullptr, *TargetClass);
+                if (!Cls)
+                    SS = FindObject<UScriptStruct>(nullptr, *TargetClass);
             }
             else
             {
@@ -1856,6 +1859,21 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
                 Cls = FindFirstObject<UClass>(*TargetClass, EFindFirstObjectOptions::NativeFirst);
             if (Cls)
                 TargetFunc = Cls->FindFunctionByName(FName(*FunctionName));
+            else if (SS)
+            {
+                // UScriptStruct doesn't have FindFunctionByName; iterate Children
+                for (UField* Field = SS->Children; Field; Field = Field->Next)
+                {
+                    if (UFunction* F = Cast<UFunction>(Field))
+                    {
+                        if (F->GetFName() == FName(*FunctionName))
+                        {
+                            TargetFunc = F;
+                            break;
+                        }
+                    }
+                }
+            }
         }
 
         if (!TargetFunc)
@@ -1864,6 +1882,35 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
             for (UClass* Cls = Blueprint->GeneratedClass; Cls && !TargetFunc; Cls = Cls->GetSuperClass())
             {
                 TargetFunc = Cls->FindFunctionByName(FName(*FunctionName));
+            }
+        }
+
+        if (!TargetFunc && !TargetClass.IsEmpty())
+        {
+            // Search in UScriptStruct (for struct member functions like HasTag on GameplayTagContainer)
+            auto FindFuncOnStruct = [&](UScriptStruct* InSS) -> UFunction*
+            {
+                for (UField* Field = InSS->Children; Field; Field = Field->Next)
+                {
+                    if (UFunction* F = Cast<UFunction>(Field))
+                    {
+                        if (F->GetFName() == FName(*FunctionName))
+                            return F;
+                    }
+                }
+                return nullptr;
+            };
+
+            if (UScriptStruct* SS = FindObject<UScriptStruct>(ANY_PACKAGE, *TargetClass))
+            {
+                TargetFunc = FindFuncOnStruct(SS);
+            }
+            if (!TargetFunc)
+            {
+                if (UScriptStruct* SS = FindObject<UScriptStruct>(nullptr, *FString::Printf(TEXT("/Script/GameplayTags.%s"), *TargetClass)))
+                {
+                    TargetFunc = FindFuncOnStruct(SS);
+                }
             }
         }
 
