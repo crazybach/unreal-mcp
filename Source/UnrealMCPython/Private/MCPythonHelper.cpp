@@ -2096,8 +2096,10 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
             OutError = TEXT("CastTo node missing 'cast_class'.");
             return nullptr;
         }
-        // Try full path first, then common module prefixes
-        UClass* TargetClass = LoadClass<UObject>(nullptr, *CastClass);
+        // Try short name first, then full path, then common module prefixes
+        UClass* TargetClass = FindObject<UClass>(ANY_PACKAGE, *CastClass);
+        if (!TargetClass)
+            TargetClass = LoadClass<UObject>(nullptr, *CastClass);
         if (!TargetClass)
             TargetClass = LoadClass<UObject>(nullptr, *FString::Printf(TEXT("/Script/Engine.%s"), *CastClass));
         if (!TargetClass)
@@ -2197,7 +2199,9 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
 
         if (bHasExternalClass)
         {
-            UClass* OwnerClass = LoadClass<UObject>(nullptr, *VarClass);
+            UClass* OwnerClass = FindObject<UClass>(ANY_PACKAGE, *VarClass);
+            if (!OwnerClass)
+                OwnerClass = LoadClass<UObject>(nullptr, *VarClass);
             if (!OwnerClass)
                 OwnerClass = LoadClass<UObject>(nullptr, *FString::Printf(TEXT("/Script/Engine.%s"), *VarClass));
             if (OwnerClass)
@@ -2232,7 +2236,9 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
 
         if (bHasExternalClass)
         {
-            UClass* OwnerClass = LoadClass<UObject>(nullptr, *VarClass);
+            UClass* OwnerClass = FindObject<UClass>(ANY_PACKAGE, *VarClass);
+            if (!OwnerClass)
+                OwnerClass = LoadClass<UObject>(nullptr, *VarClass);
             if (!OwnerClass)
                 OwnerClass = LoadClass<UObject>(nullptr, *FString::Printf(TEXT("/Script/Engine.%s"), *VarClass));
             if (OwnerClass)
