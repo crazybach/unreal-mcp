@@ -178,6 +178,10 @@ public:
     UFUNCTION(BlueprintCallable, Category="Editor|MCPython")
     static FString RemoveFunctionGraph(UBlueprint* Blueprint, const FString& FuncName);
 
+    /** Copy a function graph from another blueprint */
+    UFUNCTION(BlueprintCallable, Category="Editor|MCPython")
+    static FString CopyFunctionGraph(UBlueprint* DestBP, const FString& SourceBPPath, const FString& FuncName);
+
     /** Add a single node to a Blueprint graph from JSON description */
     UFUNCTION(BlueprintCallable, Category="Editor|MCPython")
     static FString AddBlueprintNode(UBlueprint* Blueprint, const FString& GraphName, const FString& NodeJson);

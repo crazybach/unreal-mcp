@@ -1701,15 +1701,11 @@ FString UMCPythonHelper::AddFunctionGraph(UBlueprint* Blueprint, const FString& 
     }
     else
     {
-        // New function: add to FunctionGraphs and create FunctionEntry manually
-        Blueprint->FunctionGraphs.Add(NewGraph);
-
-        FGraphNodeCreator<UK2Node_FunctionEntry> EntryCreator(*NewGraph);
-        UK2Node_FunctionEntry* EntryNode = EntryCreator.CreateNode(false);
-        EntryNode->FunctionReference.SetSelfMember(FName(*FuncName));
-        EntryNode->NodePosX = 0;
-        EntryNode->NodePosY = 0;
-        EntryCreator.Finalize();
+        // New function: use AddFunctionGraph (same as editor behavior).
+        // Passing nullptr as parent ensures the graph is properly set up
+        // with default entry/result nodes and registered on the skeleton class,
+        // which makes the details panel editable.
+        FBlueprintEditorUtils::AddFunctionGraph<UFunction>(Blueprint, NewGraph, /*bIsUserCreated=*/true, nullptr);
     }
 
     FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
@@ -1748,6 +1744,66 @@ FString UMCPythonHelper::RemoveFunctionGraph(UBlueprint* Blueprint, const FStrin
     FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
 
     return MakeJsonSuccess(FString::Printf(TEXT("Function '%s' removed."), *FuncName));
+}
+
+// ─── CopyFunctionGraph ────────────────────────────────────────────────────
+
+FString UMCPythonHelper::CopyFunctionGraph(UBlueprint* DestBP, const FString& SourceBPPath, const FString& FuncName)
+{
+    if (!DestBP)
+        return MakeJsonError(TEXT("Invalid destination Blueprint."));
+
+    UBlueprint* SourceBP = LoadObject<UBlueprint>(nullptr, *SourceBPPath);
+    if (!SourceBP)
+        return MakeJsonError(FString::Printf(TEXT("Source blueprint not found: %s"), *SourceBPPath));
+
+    // Find source graph
+    UEdGraph* SourceGraph = nullptr;
+    for (UEdGraph* G : SourceBP->FunctionGraphs)
+    {
+        if (G && G->GetName().Equals(FuncName, ESearchCase::IgnoreCase))
+        {
+            SourceGraph = G;
+            break;
+        }
+    }
+    if (!SourceGraph)
+        return MakeJsonError(FString::Printf(TEXT("Source function '%s' not found in %s."), *FuncName, *SourceBPPath));
+
+    // Remove existing dest graph if present
+    for (UEdGraph* G : DestBP->FunctionGraphs)
+    {
+        if (G && G->GetName().Equals(FuncName, ESearchCase::IgnoreCase))
+        {
+            FBlueprintEditorUtils::RemoveGraph(DestBP, G, EGraphRemoveFlags::Recompile);
+            break;
+        }
+    }
+
+    // Clone the graph by duplicating the source object
+    UEdGraph* NewGraph = DuplicateObject<UEdGraph>(SourceGraph, DestBP);
+    if (!NewGraph)
+        return MakeJsonError(FString::Printf(TEXT("Failed to clone graph '%s'."), *FuncName));
+
+    // Fix up node GUIDs so they're unique in the dest BP
+    for (UEdGraphNode* Node : NewGraph->Nodes)
+    {
+        Node->CreateNewGuid();
+    }
+
+    // Add the cloned graph to the dest blueprint
+    // (don't call AddFunctionGraph — it would recreate entry nodes and overwrite our copy)
+    NewGraph->bAllowDeletion = true;
+    NewGraph->bAllowRenaming = true;
+    DestBP->FunctionGraphs.Add(NewGraph);
+
+    FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(DestBP);
+
+    TSharedPtr<FJsonObject> R = MakeShareable(new FJsonObject());
+    R->SetBoolField(TEXT("success"), true);
+    R->SetStringField(TEXT("message"), FString::Printf(TEXT("Function '%s' copied from %s."), *FuncName, *SourceBPPath));
+    R->SetNumberField(TEXT("node_count"), NewGraph->Nodes.Num());
+    return SerializeJsonObj(R);
 }
 
 // ─── Blueprint Node Creation Helpers ─────────────────────────────────────────
@@ -1885,7 +1941,149 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
         CustomNode->NodePosX = PosX;
         CustomNode->NodePosY = PosY;
         Creator.Finalize();
+
+        // Support adding parameters to CustomEvent (needed for delegate matching)
+        const TArray<TSharedPtr<FJsonValue>>* EventParams;
+        if (NodeJson->TryGetArrayField(TEXT("params"), EventParams))
+        {
+            for (const TSharedPtr<FJsonValue>& ParamVal : *EventParams)
+            {
+                const TSharedPtr<FJsonObject>* ParamObj;
+                if (ParamVal->TryGetObject(ParamObj))
+                {
+                    FString PinName, PinTypeStr, PinSubType;
+                    (*ParamObj)->TryGetStringField(TEXT("name"), PinName);
+                    (*ParamObj)->TryGetStringField(TEXT("type"), PinTypeStr);
+                    (*ParamObj)->TryGetStringField(TEXT("sub_type"), PinSubType);
+
+                    FEdGraphPinType PinType;
+                    if (ParseVariableType(PinTypeStr, PinSubType, false, PinType))
+                    {
+                        CustomNode->CreateUserDefinedPin(FName(*PinName), PinType, EGPD_Output);
+                    }
+                }
+            }
+            CustomNode->ReconstructNode();
+        }
         NewNode = CustomNode;
+    }
+    else if (NodeType == TEXT("ModifyFunctionEntry"))
+    {
+        // Add/remove user-defined pins on the FunctionEntry of the current graph.
+        // Used to add output parameters to a function without rebuilding the whole graph.
+        FString FuncGraphName;
+        UEdGraph* TargetFuncGraph = Graph;
+        if (NodeJson->TryGetStringField(TEXT("graph_name"), FuncGraphName))
+        {
+            // Find the specified function graph in this blueprint
+            for (UEdGraph* G : Blueprint->FunctionGraphs)
+            {
+                if (G && G->GetName().Equals(FuncGraphName, ESearchCase::IgnoreCase))
+                {
+                    TargetFuncGraph = G;
+                    break;
+                }
+            }
+        }
+
+        UK2Node_FunctionEntry* FuncEntry = nullptr;
+        if (TargetFuncGraph)
+        {
+            for (UEdGraphNode* Node : TargetFuncGraph->Nodes)
+            {
+                FuncEntry = Cast<UK2Node_FunctionEntry>(Node);
+                if (FuncEntry) break;
+            }
+        }
+
+        if (!FuncEntry)
+        {
+            OutError = TEXT("ModifyFunctionEntry: FunctionEntry not found in graph.");
+            return nullptr;
+        }
+
+        // Find or create FunctionResult node (for output params).
+        // Mirrors FBaseBlueprintGraphActionDetails::AttemptToCreateResultNode()
+        UK2Node_FunctionResult* FuncResult = nullptr;
+        for (UEdGraphNode* Node : TargetFuncGraph->Nodes)
+        {
+            FuncResult = Cast<UK2Node_FunctionResult>(Node);
+            if (FuncResult) break;
+        }
+        if (!FuncResult)
+        {
+            // Create one if it doesn't exist (editor auto-creates it)
+            FuncResult = FBlueprintEditorUtils::FindOrCreateFunctionResultNode(FuncEntry);
+        }
+
+        // Remove pins by name if specified (from both Entry and Result)
+        const TArray<TSharedPtr<FJsonValue>>* RemovePins;
+        if (NodeJson->TryGetArrayField(TEXT("remove_pins"), RemovePins))
+        {
+            for (const TSharedPtr<FJsonValue>& PinVal : *RemovePins)
+            {
+                FString PinName;
+                if (PinVal->TryGetString(PinName))
+                {
+                    FuncEntry->RemoveUserDefinedPinByName(FName(*PinName));
+                    if (FuncResult)
+                        FuncResult->RemoveUserDefinedPinByName(FName(*PinName));
+                }
+            }
+        }
+
+        // Add new pins: INPUT params go on FunctionEntry, OUTPUT params go on FunctionResult
+        // This matches how BlueprintDetailsCustomization.cpp categorizes them:
+        //   "Inputs"  = FunctionEntry pins  (EGPD_Output, bIsReference=false)
+        //   "Outputs" = FunctionResult pins (EGPD_Input,  bIsReference=true)
+        const TArray<TSharedPtr<FJsonValue>>* AddParams;
+        if (NodeJson->TryGetArrayField(TEXT("params"), AddParams))
+        {
+            for (const TSharedPtr<FJsonValue>& ParamVal : *AddParams)
+            {
+                const TSharedPtr<FJsonObject>* ParamObj;
+                if (ParamVal->TryGetObject(ParamObj))
+                {
+                    FString PinName, PinTypeStr, PinSubType;
+                    bool bIsOutput = false, bIsArray = false;
+                    (*ParamObj)->TryGetStringField(TEXT("name"), PinName);
+                    (*ParamObj)->TryGetStringField(TEXT("type"), PinTypeStr);
+                    (*ParamObj)->TryGetStringField(TEXT("sub_type"), PinSubType);
+                    (*ParamObj)->TryGetBoolField(TEXT("is_output"), bIsOutput);
+                    (*ParamObj)->TryGetBoolField(TEXT("is_array"), bIsArray);
+
+                    if (PinName.IsEmpty() || PinTypeStr.IsEmpty())
+                        continue;
+
+                    FEdGraphPinType PinType;
+                    if (ParseVariableType(PinTypeStr, PinSubType, bIsArray, PinType))
+                    {
+                        PinType.bIsReference = bIsOutput;
+                        if (bIsOutput)
+                        {
+                            if (FuncResult)
+                            {
+                                FuncResult->CreateUserDefinedPin(FName(*PinName), PinType, EGPD_Input, false);
+                            }
+                            else
+                            {
+                                UE_LOG(LogTemp, Warning, TEXT("ModifyFunctionEntry: FuncResult is null, cannot add output param '%s'"), *PinName);
+                            }
+                        }
+                        else
+                        {
+                            FuncEntry->CreateUserDefinedPin(FName(*PinName), PinType, EGPD_Output, false);
+                        }
+                    }
+                }
+            }
+        }
+
+        FuncEntry->ReconstructNode();
+        if (FuncResult)
+            FuncResult->ReconstructNode();
+        FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+        NewNode = FuncEntry;
     }
     else if (NodeType == TEXT("CastTo"))
     {
@@ -1944,6 +2142,39 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
         OpNode->NodePosX = PosX;
         OpNode->NodePosY = PosY;
         Creator.Finalize();
+
+        // Set OperationName via FProperty reflection (it's a private UPROPERTY)
+        FString OpName;
+        if (NodeJson->TryGetStringField(TEXT("operation"), OpName))
+        {
+            static FNameProperty* OpNameProp = nullptr;
+            if (!OpNameProp)
+            {
+                OpNameProp = FindFProperty<FNameProperty>(UK2Node_PromotableOperator::StaticClass(), TEXT("OperationName"));
+            }
+            if (OpNameProp)
+            {
+                FName OpFName(*OpName);
+                OpNameProp->SetPropertyValue_InContainer(OpNode, OpFName);
+            }
+        }
+
+        // Set NumAdditionalInputs for operations needing more than the default 2 inputs
+        int32 ExtraInputs = 0;
+        if (NodeJson->TryGetNumberField(TEXT("extra_inputs"), ExtraInputs))
+        {
+            static FIntProperty* NumInputsProp = nullptr;
+            if (!NumInputsProp)
+            {
+                NumInputsProp = FindFProperty<FIntProperty>(UK2Node_PromotableOperator::StaticClass(), TEXT("NumAdditionalInputs"));
+            }
+            if (NumInputsProp)
+            {
+                NumInputsProp->SetPropertyValue_InContainer(OpNode, ExtraInputs);
+            }
+        }
+
+        OpNode->ReconstructNode();
         NewNode = OpNode;
     }
     else if (NodeType == TEXT("VariableGet"))
@@ -2300,6 +2531,23 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
         Creator.Finalize();
         NewNode = CreateDelegateNode;
     }
+    else if (NodeType == TEXT("CallParentFunction"))
+    {
+        FString FuncName;
+        if (!NodeJson->TryGetStringField(TEXT("function_name"), FuncName))
+        {
+            OutError = TEXT("CallParentFunction node missing 'function_name'.");
+            return nullptr;
+        }
+
+        FGraphNodeCreator<UK2Node_CallParentFunction> Creator(*Graph);
+        UK2Node_CallParentFunction* ParentNode = Creator.CreateNode(false);
+        ParentNode->SetFromFunction(Blueprint->ParentClass->FindFunctionByName(FName(*FuncName)));
+        ParentNode->NodePosX = PosX;
+        ParentNode->NodePosY = PosY;
+        Creator.Finalize();
+        NewNode = ParentNode;
+    }
     else if (NodeType == TEXT("FunctionResult"))
     {
         // Collect return value specs
@@ -2332,47 +2580,54 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
             }
         }
 
-        // Add output pins to FunctionEntry first -- this defines the function signature
-        // The FunctionResult will auto-generate matching input pins
+        // Create or reuse FunctionResult node (output params go here, matching
+        // how BlueprintDetailsCustomization.cpp categorizes "Outputs" from FunctionResult).
+        UK2Node_FunctionResult* ResultNode = nullptr;
         for (UEdGraphNode* Node : Graph->Nodes)
         {
-            if (UK2Node_FunctionEntry* EntryNode = Cast<UK2Node_FunctionEntry>(Node))
+            ResultNode = Cast<UK2Node_FunctionResult>(Node);
+            if (ResultNode) break;
+        }
+
+        if (!ResultNode)
+        {
+            // Find FunctionEntry to create result via proper API
+            UK2Node_FunctionEntry* EntryNode = nullptr;
+            for (UEdGraphNode* Node : Graph->Nodes)
             {
-                // Remove existing return value pins before adding new ones
-                for (const auto& Spec : ReturnPinSpecs)
-                {
-                    EntryNode->RemoveUserDefinedPinByName(Spec.Key);
-                }
-                // Add new return value pins
-                for (const auto& Spec : ReturnPinSpecs)
-                {
-                    EntryNode->CreateUserDefinedPin(Spec.Key, Spec.Value, EGPD_Output, false);
-                }
-                EntryNode->ReconstructNode();
-                break;
+                EntryNode = Cast<UK2Node_FunctionEntry>(Node);
+                if (EntryNode) break;
+            }
+            if (EntryNode)
+            {
+                ResultNode = FBlueprintEditorUtils::FindOrCreateFunctionResultNode(EntryNode);
             }
         }
 
-        FGraphNodeCreator<UK2Node_FunctionResult> Creator(*Graph);
-        UK2Node_FunctionResult* ResultNode = Creator.CreateNode(false);
-        ResultNode->NodePosX = PosX;
-        ResultNode->NodePosY = PosY;
-        Creator.Finalize();
+        if (!ResultNode)
+        {
+            // Fallback: create manually
+            FGraphNodeCreator<UK2Node_FunctionResult> Creator(*Graph);
+            ResultNode = Creator.CreateNode(false);
+            ResultNode->NodePosX = PosX;
+            ResultNode->NodePosY = PosY;
+            Creator.Finalize();
+        }
 
-        // Also create pins directly on the ResultNode as a fallback
+        // Add output pins ONLY to FunctionResult (not FunctionEntry).
+        // FunctionResult pins with EGPD_Input appear as "Outputs" in the details panel.
         for (const auto& Spec : ReturnPinSpecs)
         {
-            if (!ResultNode->FindPin(Spec.Key))
-            {
-                ResultNode->CreatePin(EGPD_Input, Spec.Value, Spec.Key);
-            }
+            ResultNode->RemoveUserDefinedPinByName(Spec.Key);
+            ResultNode->CreateUserDefinedPin(Spec.Key, Spec.Value, EGPD_Input, false);
         }
+        ResultNode->ReconstructNode();
 
         NewNode = ResultNode;
     }
     else
     {
-        OutError = FString::Printf(TEXT("Unknown node type '%s'. Supported: CallFunction, Event, CustomEvent, CastTo, Branch, Sequence, PromotableOperator, VariableGet, VariableSet, MacroInstance, InputKey, SpawnActor, AsyncAction, LatentAbilityCall, AddDelegate, CreateDelegate, FunctionResult."), *NodeType);
+        OutError = FString::Printf(TEXT("Unknown node type '%s'. Supported: CallFunction, Event, CustomEvent, ModifyFunctionEntry, CastTo, Branch, Sequence, PromotableOperator, VariableGet, VariableSet, MacroInstance, InputKey, SpawnActor, AsyncAction, LatentAbilityCall, AddDelegate, CreateDelegate, CallParentFunction, FunctionResult."), *NodeType);
         return nullptr;
     }
 
