@@ -2416,25 +2416,14 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
             }
         }
 
+        // WARNING: Do NOT call CreatePinsForClass — it crashes Unreal when
+        // called on UK2Node_SpawnActorFromClass outside of editor UI context.
+        // Let Finalize() create default pins; the spawn class can be set
+        // via the Class pin default after node creation.
         FGraphNodeCreator<UK2Node_SpawnActorFromClass> Creator(*Graph);
         UK2Node_SpawnActorFromClass* SpawnNode = Creator.CreateNode(false);
         SpawnNode->NodePosX = PosX;
         SpawnNode->NodePosY = PosY;
-
-        // Set spawn class BEFORE Finalize to avoid crash (CreatePinsForClass
-        // must run before AllocateDefaultPins which happens in Finalize).
-        FString SpawnClass;
-        if (NodeJson->TryGetStringField(TEXT("spawn_class"), SpawnClass) && !SpawnClass.IsEmpty())
-        {
-            UClass* Class = FindObject<UClass>(ANY_PACKAGE, *SpawnClass);
-            if (!Class)
-                Class = LoadClass<UObject>(nullptr, *SpawnClass);
-            if (Class)
-            {
-                SpawnNode->CreatePinsForClass(Class);
-            }
-        }
-
         Creator.Finalize();
 
         NewNode = SpawnNode;
