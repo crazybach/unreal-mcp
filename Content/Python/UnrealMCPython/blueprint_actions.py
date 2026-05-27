@@ -638,6 +638,57 @@ def ue_add_function_graph(asset_path: str = None, func_name: str = None) -> str:
         return json.dumps({"success": False, "message": str(e), "traceback": traceback.format_exc()})
 
 
+def ue_create_blueprint(asset_path: str = None, parent_class_path: str = "/Script/Engine.Actor") -> str:
+    """Creates a new Blueprint asset in the content browser with a specified parent class.
+
+    :param asset_path: Full path for the new Blueprint (e.g., '/Game/Blueprints/BP_MyActor').
+    :param parent_class_path: Parent class path (e.g., '/Script/Engine.Actor' for C++ or
+                              '/Game/Blueprints/BP_Base.BP_Base_C' for a Blueprint class).
+    :return: JSON string with creation result.
+    """
+    if asset_path is None:
+        return json.dumps({"success": False, "message": "Required parameter 'asset_path' is missing."})
+    try:
+        # Parse asset_path: /Game/Folder/AssetName or /Game/Folder/AssetName.AssetName
+        clean_path = asset_path
+        if "." in asset_path:
+            # Has .AssetName suffix — use the part before the dot as package+name
+            clean_path = asset_path.rsplit(".", 1)[0]
+
+        parts = clean_path.rsplit("/", 1)
+        if len(parts) != 2:
+            return json.dumps({"success": False, "message": f"Invalid asset_path format: {asset_path}"})
+        package_path = parts[0]
+        asset_name = parts[1]
+
+        # Load parent class
+        parent_class = unreal.load_class(name=parent_class_path)
+        if not parent_class:
+            return json.dumps({"success": False, "message": f"Failed to load parent class: {parent_class_path}"})
+
+        # Create factory with parent class
+        factory = unreal.BlueprintFactory()
+        factory.set_editor_property("ParentClass", parent_class)
+
+        # Create the Blueprint asset
+        asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
+        new_bp = asset_tools.create_asset(asset_name, package_path, unreal.Blueprint, factory)
+
+        if new_bp:
+            unreal.EditorAssetLibrary.save_asset(new_bp.get_path_name())
+            bp_path = new_bp.get_path_name()
+            return json.dumps({
+                "success": True,
+                "asset_path": bp_path,
+                "parent_class": parent_class_path,
+                "message": f"Blueprint created at {bp_path} with parent {parent_class_path}"
+            })
+        else:
+            return json.dumps({"success": False, "message": f"Failed to create Blueprint at {asset_path}. Check if parent class is valid."})
+    except Exception as e:
+        return json.dumps({"success": False, "message": str(e), "traceback": traceback.format_exc()})
+
+
 def ue_remove_function_graph(asset_path: str = None, func_name: str = None) -> str:
     """Removes a function graph from a Blueprint by name. Returns JSON."""
     if asset_path is None:

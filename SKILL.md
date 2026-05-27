@@ -121,6 +121,83 @@ Some functions live on USTRUCTs (not UCLASSes). Examples: `HasTag` on `GameplayT
 
 ---
 
+## Asset & Blueprint Creation Tools
+
+### `create_folder`
+
+Creates a content browser folder. Pure Python — `unreal.EditorAssetLibrary.make_directory()`.
+
+```python
+# Path: /Game/MyFolder/SubFolder
+create_folder(folder_path="/Game/MyFolder/SubFolder")
+```
+
+### `duplicate_asset`
+
+Duplicates an asset to a new path. Destination must include both package path AND asset name.
+
+```python
+duplicate_asset(
+    source_asset_path="/Game/MyFolder/MyAsset.MyAsset",
+    destination_path="/Game/MyFolder/Copy/MyAsset.MyAsset"
+)
+```
+
+### `create_blueprint`
+
+Creates a new Blueprint with a specified parent class.
+
+```python
+# C++ parent:
+create_blueprint(
+    asset_path="/Game/Blueprints/BP_MyActor",
+    parent_class_path="/Script/Engine.Actor"
+)
+
+# Blueprint parent (note _C suffix):
+create_blueprint(
+    asset_path="/Game/Blueprints/BP_Child",
+    parent_class_path="/Game/Blueprints/BP_Base.BP_Base_C"
+)
+```
+
+### `set_gameplay_effect_properties`
+
+Sets CDO properties on a GameplayEffect Blueprint. Supports duration policy, stacking, period, and tag manipulation via `InheritableOwnedTagsContainer`.
+
+```python
+set_gameplay_effect_properties(
+    asset_path="/Game/GE_MyEffect.GE_MyEffect",
+    properties={
+        "duration_policy": "Infinite",
+        "stacking_type": "AggregateByTarget",
+        "stack_limit_count": 5,
+        "period": 0.0,
+        "inherited_ownable_tags": {
+            "added": [{"tag_name": "Trait.MyBuff"}]
+        }
+    }
+)
+```
+
+**Important:** `period` is a `ScalableFloat` struct — the tool sets `ScalableFloat.Value`. Tags use `InheritableOwnedTagsContainer.added/removed` (not `inherited_ownable_tags`).
+
+### Class References on Pins Need `_C` Suffix
+
+When setting a Blueprint class reference on a pin (via `set_blueprint_node_pin_default`), use the **generated class** path with `_C` suffix:
+
+```
+# WRONG — asset path (compiler: "Literal on pin is not a class")
+/Game/Blueprints/BP_Base.BP_Base
+
+# RIGHT — generated class path
+/Game/Blueprints/BP_Base.BP_Base_C
+```
+
+This applies to any class-type pin: `GameplayEffectClass`, `SourceGameplayEffect`, cast targets, etc.
+
+---
+
 ## Common Patterns
 
 ### Creating a New Function

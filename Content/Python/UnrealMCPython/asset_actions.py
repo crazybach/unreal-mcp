@@ -47,6 +47,37 @@ def ue_find_by_query(name : str = None, asset_type : str = None) -> str:
             
     return json.dumps({"success": True, "assets": matches, "message": f"{len(matches)} assets found matching query."})
 
+def ue_create_folder(folder_path: str = None) -> str:
+    """Creates a folder in the Unreal content browser."""
+    if folder_path is None:
+        return json.dumps({"success": False, "message": "Required parameter 'folder_path' is missing."})
+    try:
+        success = unreal.EditorAssetLibrary.make_directory(folder_path)
+        if success:
+            return json.dumps({"success": True, "folder_path": folder_path, "message": f"Folder created at {folder_path}"})
+        else:
+            return json.dumps({"success": False, "message": f"Failed to create folder at {folder_path} (may already exist)"})
+    except Exception as e:
+        return json.dumps({"success": False, "message": str(e), "traceback": traceback.format_exc()})
+
+
+def ue_duplicate_asset(source_asset_path: str = None, destination_path: str = None) -> str:
+    """Duplicates an asset in the Unreal content browser to a new path."""
+    if source_asset_path is None:
+        return json.dumps({"success": False, "message": "Required parameter 'source_asset_path' is missing."})
+    if destination_path is None:
+        return json.dumps({"success": False, "message": "Required parameter 'destination_path' is missing."})
+    try:
+        duplicated = unreal.EditorAssetLibrary.duplicate_asset(source_asset_path, destination_path)
+        if duplicated:
+            result_path = duplicated.get_path_name() if hasattr(duplicated, 'get_path_name') else str(duplicated)
+            return json.dumps({"success": True, "source": source_asset_path, "destination": result_path, "message": f"Asset duplicated to {result_path}"})
+        else:
+            return json.dumps({"success": False, "message": f"Failed to duplicate {source_asset_path} to {destination_path}"})
+    except Exception as e:
+        return json.dumps({"success": False, "message": str(e), "traceback": traceback.format_exc()})
+
+
 def ue_get_static_mesh_details(asset_path: str = None) -> str:
     """
     Retrieves the bounding box and dimensions of a static mesh asset.

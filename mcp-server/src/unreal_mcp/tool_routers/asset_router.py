@@ -39,3 +39,32 @@ async def get_static_mesh_details(
     """Retrieves details for a static mesh asset."""
     params = {"asset_path": asset_path}
     return await send_unreal_action(ASSET_ACTIONS_MODULE, params)
+
+
+@asset_mcp.tool(
+    name="create_folder",
+    description="Creates a new folder in the Unreal Engine content browser at the specified path.",
+    tags={"unreal", "asset", "folder", "create", "content-browser"}
+)
+async def create_folder(
+    folder_path: Annotated[str, Field(description="Path for the new folder (e.g., '/Game/MyFolder').", min_length=1)]
+) -> dict:
+    """Creates a folder in the content browser."""
+    params = {"folder_path": folder_path}
+    return await send_unreal_action(ASSET_ACTIONS_MODULE, params)
+
+
+@asset_mcp.tool(
+    name="duplicate_asset",
+    description="Duplicates an asset in the Unreal Engine content browser to a new path. "
+                "The destination path must include both the package path and asset name "
+                "(e.g., '/Game/Folder/NewAssetName.NewAssetName').",
+    tags={"unreal", "asset", "duplicate", "copy", "content-browser"}
+)
+async def duplicate_asset(
+    source_asset_path: Annotated[str, Field(description="Path to the source asset (e.g., '/Game/Meshes/MyMesh.MyMesh').", min_length=1)],
+    destination_path: Annotated[str, Field(description="Full destination path including asset name (e.g., '/Game/Meshes/MyMesh_Copy.MyMesh_Copy').", min_length=1)],
+) -> dict:
+    """Duplicates an asset to a new path."""
+    params = {"source_asset_path": source_asset_path, "destination_path": destination_path}
+    return await send_unreal_action(ASSET_ACTIONS_MODULE, params)

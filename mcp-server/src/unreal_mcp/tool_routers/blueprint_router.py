@@ -519,3 +519,23 @@ async def remove_function_graph(
     """Removes a function graph from a Blueprint."""
     params = {"asset_path": asset_path, "func_name": func_name}
     return await send_unreal_action(BP_ACTIONS_MODULE, params)
+
+
+# ─── Asset Creation Tool ──────────────────────────────────────────────────────────
+
+@blueprint_mcp.tool(
+    name="create_blueprint",
+    description="Creates a new Blueprint asset in the content browser with a specified parent class. "
+                "For C++ parent classes use '/Script/ModuleName.ClassName' (e.g., '/Script/Engine.Actor', "
+                "'/Script/GameplayAbilities.GameplayEffect'). "
+                "For Blueprint parent classes use the full asset path with '_C' suffix "
+                "(e.g., '/Game/Blueprints/BP_Base.BP_Base_C').",
+    tags={"unreal", "blueprint", "create", "asset", "content-browser"}
+)
+async def create_blueprint(
+    asset_path: Annotated[str, Field(description="Path for the new Blueprint (e.g., '/Game/Blueprints/BP_MyActor').")],
+    parent_class_path: Annotated[str, Field(description="Parent class path. For C++: '/Script/Engine.Actor'. For BP: '/Game/BP_Base.BP_Base_C'.")] = "/Script/Engine.Actor",
+) -> dict:
+    """Creates a new Blueprint asset."""
+    params = {"asset_path": asset_path, "parent_class_path": parent_class_path}
+    return await send_unreal_action(BP_ACTIONS_MODULE, params)
