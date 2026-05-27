@@ -260,6 +260,20 @@ This lets the user immediately see which events are wired and which are empty st
 
 `connect_blueprint_pins` can return `"success": true` even when the connection silently failed (schema rejected it, node not found, etc.). **Always verify** by calling `get_blueprint_graph_info` fresh and checking the event's `then` pin `linked_to` array. If the connection succeeded, it will appear there. If not, the pin is still empty and you need to re-connect.
 
+### Detect and Report Dead/Orphaned Nodes
+
+After every round of EventGraph changes, scan for dead nodes. A node is **dead** if:
+- It has exec pins (`execute`, `then`, etc.) but no exec input connection from any upstream node
+- It has no data connections at all (no links in or out)
+- It cannot trace back to an event node via the execution chain
+
+Dead nodes are pruned by the compiler and their data outputs read as defaults. Common causes:
+- `build_blueprint_graph` created nodes that were never connected to events
+- A node's exec input was disconnected but the node wasn't removed
+- A `ClassDynamicCast` or `CastTo` that's wired for data but has no exec flow
+
+**Always report dead nodes to the user** and offer to remove them.
+
 ### How to Check If an Event Is Empty
 
 1. Call `get_blueprint_graph_info` on the EventGraph
