@@ -264,6 +264,12 @@ This lets the user immediately see which events are wired and which are empty st
    - If `linked_to` has entries → the event is **wired** (has a body)
 3. Report empty events explicitly: `"OnPickupTaken: 0 nodes (empty)"`
 
+### Never Touch Already-Wired Chains When Fixing Another
+
+When working on one event chain (e.g., OnTargetDataReceived), **never** modify, delete, or reconnect nodes belonging to other already-wired chains. If a necessary operation would affect a wired chain, **stop and ask the user** for confirmation before proceeding. Explain what would be affected and wait for approval.
+
+Example: If `OnPickupTaken → CallFunction_25` is wired and working, do not touch `K2Node_CallFunction_25` or any of its connections while fixing `OnTargetDataReceived`.
+
 ### Never Use build_blueprint_graph on EventGraph Incrementally
 
 `BuildBlueprintGraph` **deletes all non-Event nodes** before recreating from JSON. It only preserves:
