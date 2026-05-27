@@ -225,9 +225,18 @@ Use short `id` strings — the tool returns a `node_id_to_name` map for connecti
 
 ## EventGraph Management
 
-### Golden Rule: Events Must Have Connections
+### Golden Rule: Never Trust Cached Data
 
-An event node with no `then` pin connected is **dead code** — the event fires but does nothing. Always verify that every Event/CustomEvent has at least:
+After ANY mutation (add, connect, build, remove, compile), the graph changes. **Always call `get_blueprint_graph_info` fresh** to get the current state. Saved tool-result JSON files are snapshots from a past point in time — they become stale immediately after any write operation.
+
+### The Execution Pin Is the Only Truth
+
+The `then` pin (exec output) is the definitive evidence of whether an event is wired. **No `then` connection = empty event.** Period. Even if body nodes exist in the graph, if the event's `then` pin isn't linked to them, they're orphaned and will be pruned by the compiler.
+
+When checking event status:
+1. Look at the event node's `then` pin
+2. If `linked_to` is empty → **event is empty** (no matter what other nodes exist)
+3. If `linked_to` has entries → event is wired (trace the chain to count body nodes)
 - `then` → an `execute` pin on a downstream node
 - Any output data pins connected to their consumers
 
