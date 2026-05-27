@@ -236,7 +236,7 @@ Think of the event graph like a normal program. The **execution pins** (`then`, 
   1: Branch (IsOwnerBotControlled)
     [then] → Bot path
     2: WaitTargetData (Instant)
-    [else] → Player path  
+    [else] → Player path
     2: WaitTargetData (Confirmed)
 ```
 

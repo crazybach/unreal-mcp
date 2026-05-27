@@ -61,6 +61,7 @@
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Engine/Blueprint.h"
+#include "GameFramework/Actor.h"
 #include "UObject/UnrealType.h"
 #include "UObject/TextProperty.h"
 #include "Components/CanvasPanelSlot.h"
@@ -2415,6 +2416,29 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
             }
         }
 
+        UClass* RequestedSpawnClass = nullptr;
+        FString SpawnClass;
+        if (NodeJson->TryGetStringField(TEXT("spawn_class"), SpawnClass) && !SpawnClass.IsEmpty())
+        {
+            RequestedSpawnClass = FindObject<UClass>(ANY_PACKAGE, *SpawnClass);
+            if (!RequestedSpawnClass)
+                RequestedSpawnClass = LoadClass<UObject>(nullptr, *SpawnClass);
+            if (!RequestedSpawnClass)
+                RequestedSpawnClass = LoadClass<UObject>(nullptr, *FString::Printf(TEXT("/Script/Engine.%s"), *SpawnClass));
+            if (!RequestedSpawnClass)
+                RequestedSpawnClass = FindFirstObject<UClass>(*SpawnClass, EFindFirstObjectOptions::NativeFirst);
+            if (!RequestedSpawnClass)
+            {
+                OutError = FString::Printf(TEXT("SpawnActor: class '%s' not found."), *SpawnClass);
+                return nullptr;
+            }
+            if (!RequestedSpawnClass->IsChildOf(AActor::StaticClass()))
+            {
+                OutError = FString::Printf(TEXT("SpawnActor: class '%s' is not an Actor class."), *SpawnClass);
+                return nullptr;
+            }
+        }
+
         // AllocateDefaultPins MUST be called before Finalize().
         // Finalize() calls PostPlacedNewNode() first, then AllocateDefaultPins()
         // only if Pins.Num()==0. But UK2Node_SpawnActorFromClass::PostPlacedNewNode()
@@ -2425,6 +2449,31 @@ static UEdGraphNode* CreateBPNodeFromJson(UEdGraph* Graph, UBlueprint* Blueprint
         SpawnNode->NodePosX = PosX;
         SpawnNode->NodePosY = PosY;
         Creator.Finalize();
+
+        if (RequestedSpawnClass)
+        {
+            UEdGraphPin* ClassPin = SpawnNode->GetClassPin();
+            if (!ClassPin)
+            {
+                Graph->RemoveNode(SpawnNode);
+                OutError = TEXT("SpawnActor: Class pin not found after node creation.");
+                return nullptr;
+            }
+
+            const UEdGraphSchema_K2* K2Schema = GetDefault<UEdGraphSchema_K2>();
+            K2Schema->TrySetDefaultObject(*ClassPin, RequestedSpawnClass);
+            if (ClassPin->DefaultObject != RequestedSpawnClass)
+            {
+                FString Reason = K2Schema->IsPinDefaultValid(ClassPin, FString(), RequestedSpawnClass, FText());
+                Graph->RemoveNode(SpawnNode);
+                OutError = FString::Printf(TEXT("SpawnActor: failed to set class '%s'%s%s"),
+                    *SpawnClass,
+                    Reason.IsEmpty() ? TEXT("") : TEXT(": "),
+                    *Reason);
+                return nullptr;
+            }
+            SpawnNode->PinDefaultValueChanged(ClassPin);
+        }
 
         NewNode = SpawnNode;
     }
