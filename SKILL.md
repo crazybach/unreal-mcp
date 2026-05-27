@@ -188,7 +188,17 @@ Fixed — `BuildBlueprintGraph` now preserves `FunctionResult` nodes. If you use
 
 `PromotableOperator` requires `operation` to be set via FProperty reflection AND `ReconstructNode()` called. The node type handles this automatically, but if pins don't appear, the operation name might not match. Use regular `CallFunction` with `Add_VectorVector` etc. as a fallback.
 
-### BoxTraceSingle / Trace Functions
+### SpawnActor Crashes Unreal
+
+Root cause: `FGraphNodeCreator::Finalize()` calls `PostPlacedNewNode()` BEFORE `AllocateDefaultPins()`. `UK2Node_SpawnActorFromClass::PostPlacedNewNode()` calls `FindPinChecked()` which asserts because pins don't exist yet.
+
+Fix: Call `AllocateDefaultPins()` manually before `Finalize()`:
+```cpp
+SpawnNode->AllocateDefaultPins();  // pins created here
+SpawnNode->NodePosX = PosX;
+SpawnNode->NodePosY = PosY;
+Creator.Finalize();  // PostPlacedNewNode now finds pins, no crash
+```
 
 Use target `KismetSystemLibrary`. The function `BoxTraceSingle` resolves to "Box Trace By Channel". Key pins: `Start`, `End`, `HalfSize`, `Orientation`, `TraceChannel`, `ActorsToIgnore`, `OutHit`. The `OutHit` connects to `BreakHitResult.Hit`.
 
@@ -210,6 +220,60 @@ Use target `KismetSystemLibrary`. The function `BoxTraceSingle` resolves to "Box
 ```
 
 Use short `id` strings — the tool returns a `node_id_to_name` map for connecting.
+
+---
+
+## EventGraph Management
+
+### Golden Rule: Events Must Have Connections
+
+An event node with no `then` pin connected is **dead code** — the event fires but does nothing. Always verify that every Event/CustomEvent has at least:
+- `then` → an `execute` pin on a downstream node
+- Any output data pins connected to their consumers
+
+### After Every MCP Interaction, Summarize the EventGraph
+
+After each round of changes (add nodes, connect, build), call `get_blueprint_graph_info` on the EventGraph and report a concise summary:
+
+```
+EventGraph status:
+  ActivateAbility          → connected (N nodes in chain)
+  OnTargetDataReceived     → connected (N nodes in chain)
+  OnPickupTaken            → connected (3 nodes)
+  BP_OnAbilityDataSet      → connected (4 nodes)
+  BP_OnSummonDealDamage    → connected (6 nodes)
+  OnSummonLifeEnded        → 0 nodes (empty — event stub only)
+```
+
+This lets the user immediately see which events are wired and which are empty stubs.
+
+### How to Check If an Event Is Empty
+
+1. Call `get_blueprint_graph_info` on the EventGraph
+2. For each `K2Node_Event` / `K2Node_CustomEvent`, check the `then` pin:
+   - If `linked_to` is empty → the event is **empty** (stub, does nothing)
+   - If `linked_to` has entries → the event is **wired** (has a body)
+3. Report empty events explicitly: `"OnPickupTaken: 0 nodes (empty)"`
+
+### Never Use build_blueprint_graph on EventGraph Incrementally
+
+`BuildBlueprintGraph` **deletes all non-Event nodes** before recreating from JSON. It only preserves:
+- `UK2Node_Event` (and `UK2Node_CustomEvent` which inherits it)
+- `UK2Node_FunctionEntry` / `UK2Node_FunctionResult`
+- `UK2Node_CallParentFunction`
+
+Every call wipes all body nodes (CallFunction, VariableGet, Branch, Sequence, CastTo, etc.). For incremental work, always use `add_blueprint_node` + `connect_blueprint_pins`.
+
+If you must use `build_blueprint_graph`, include ALL body nodes for ALL event chains in a single JSON to avoid data loss.
+
+### Fixing Stale/Broken Event Chains
+
+When a chain is broken:
+1. `remove_blueprint_node` the broken body nodes (keep the Event itself)
+2. `add_blueprint_node` fresh body nodes
+3. `connect_blueprint_pins` with exact node names from the add results
+4. `compile_blueprint` to verify
+5. Check the output log for `[Compiler]` errors if compilation fails
 
 ---
 
