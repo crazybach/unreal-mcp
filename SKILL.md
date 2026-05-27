@@ -225,6 +225,23 @@ Use short `id` strings — the tool returns a `node_id_to_name` map for connecti
 
 ## EventGraph Management
 
+### The Execution Pin Is the Program Counter
+
+Think of the event graph like a normal program. The **execution pins** (`then`, `True`, `False`, `then_0`, `then_1`) are the program counter — they define the control flow. **Data pins** are just variable assignments. When tracing or comparing graphs, always follow the exec pins first to understand the main logic flow.
+
+**Dump the exec tree** whenever comparing or verifying a chain:
+```
+0: Event ActivateAbility
+  [then]
+  1: Branch (IsOwnerBotControlled)
+    [then] → Bot path
+    2: WaitTargetData (Instant)
+    [else] → Player path  
+    2: WaitTargetData (Confirmed)
+```
+
+This exec tree is the single source of truth. If two graphs have the same exec tree, they have the same logic flow.
+
 ### Golden Rule: Never Trust Cached Data
 
 After ANY mutation (add, connect, build, remove, compile), the graph changes. **Always call `get_blueprint_graph_info` fresh** to get the current state. Saved tool-result JSON files are snapshots from a past point in time — they become stale immediately after any write operation.
