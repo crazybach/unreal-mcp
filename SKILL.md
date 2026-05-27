@@ -256,6 +256,10 @@ EventGraph status:
 
 This lets the user immediately see which events are wired and which are empty stubs.
 
+### Never Trust "Success" from connect_blueprint_pins
+
+`connect_blueprint_pins` can return `"success": true` even when the connection silently failed (schema rejected it, node not found, etc.). **Always verify** by calling `get_blueprint_graph_info` fresh and checking the event's `then` pin `linked_to` array. If the connection succeeded, it will appear there. If not, the pin is still empty and you need to re-connect.
+
 ### How to Check If an Event Is Empty
 
 1. Call `get_blueprint_graph_info` on the EventGraph
